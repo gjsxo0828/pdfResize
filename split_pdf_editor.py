@@ -823,9 +823,9 @@ def main():
         with col1:
             scale_odd = st.number_input("축소 비율", min_value=0.10, max_value=2.00, value=1.00, step=0.01, key="scale_odd")
         with col2:
-            offset_x_odd = st.number_input("좌우 이동 (mm)", min_value=-50.0, max_value=50.0, value=0.0, step=0.1, key="offset_x_odd")
+            offset_x_odd = st.number_input("좌우 이동", min_value=-50.0, max_value=50.0, value=0.0, step=0.1, key="offset_x_odd")
         with col3:
-            offset_y_odd = st.number_input("상하 이동 (mm)", min_value=-50.0, max_value=50.0, value=0.0, step=0.1, key="offset_y_odd")
+            offset_y_odd = st.number_input("상하 이동", min_value=-50.0, max_value=50.0, value=0.0, step=0.1, key="offset_y_odd")
         
         # 짝수 페이지 설정
         st.write("**짝수 페이지 (2,4,6...)**")
@@ -833,9 +833,9 @@ def main():
         with col1:
             scale_even = st.number_input("축소 비율", min_value=0.10, max_value=2.00, value=1.00, step=0.01, key="scale_even")
         with col2:
-            offset_x_even = st.number_input("좌우 이동 (mm)", min_value=-50.0, max_value=50.0, value=0.0, step=0.1, key="offset_x_even")
+            offset_x_even = st.number_input("좌우 이동", min_value=-50.0, max_value=50.0, value=0.0, step=0.1, key="offset_x_even")
         with col3:
-            offset_y_even = st.number_input("상하 이동 (mm)", min_value=-50.0, max_value=50.0, value=0.0, step=0.1, key="offset_y_even")
+            offset_y_even = st.number_input("상하 이동", min_value=-50.0, max_value=50.0, value=0.0, step=0.1, key="offset_y_even")
         
         st.divider()
         
