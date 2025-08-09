@@ -467,6 +467,7 @@ class SplitPDFEditor:
                 reordered_pages = all_pages
             
             total_pages_to_process = len(reordered_pages)
+            pages_added = 0
             
             # 각 페이지를 책에 추가
             for page_idx, image_path in enumerate(reordered_pages):
@@ -492,12 +493,21 @@ class SplitPDFEditor:
                                         scale_factor_odd, offset_x_odd, offset_y_odd,
                                         scale_factor_even, offset_x_even, offset_y_even,
                                         show_borders, book_width_pt, book_height_pt)
+                    pages_added += 1
+            
+            # 페이지가 하나도 추가되지 않은 경우 빈 페이지라도 추가
+            if pages_added == 0:
+                c.showPage()  # 빈 페이지 추가
+                pages_added = 1
             
             if progress_callback:
                 progress_callback(total_pages_to_process, total_pages_to_process, "PDF 저장 중...")
             
-            # PDF 저장
+            # PDF 저장 및 완료
             c.save()
+            
+            # 버퍼 위치를 처음으로 되돌리기
+            buffer.seek(0)
             
         finally:
             # 임시 파일 정리
@@ -511,7 +521,11 @@ class SplitPDFEditor:
         if progress_callback:
             progress_callback(total_pages_to_process, total_pages_to_process, "PDF 생성 완료!")
         
-        return buffer.getvalue()
+        # 전체 버퍼 내용 반환
+        pdf_data = buffer.getvalue()
+        buffer.close()
+        
+        return pdf_data
     
     def save_pixmap_to_image(self, pixmap, filename):
         """Pixmap을 최고품질 이미지 파일로 저장"""
@@ -624,9 +638,14 @@ class SplitPDFEditor:
         
         canvas_obj.showPage()
         
-        # 임시 파일 정리
+        # 임시 파일 정리 (예외 처리 추가)
         if adjusted_img_path != image_path:
-            os.unlink(adjusted_img_path)
+            try:
+                if os.path.exists(adjusted_img_path):
+                    os.unlink(adjusted_img_path)
+            except Exception as e:
+                # 임시 파일 삭제 실패는 무시 (PDF 생성에는 영향 없음)
+                pass
     
     def adjust_image_for_book(self, image_path, target_width, target_height, scale_mode):
         """이미지를 책 크기에 맞게 조정"""
