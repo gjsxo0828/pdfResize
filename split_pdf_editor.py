@@ -1307,6 +1307,8 @@ def main():
             
             # 편집 버튼
             if st.button("📖 PDF 생성하기", type="primary"):
+                st.info("🚀 PDF 생성을 시작합니다...")
+                
                 # 프로그래스바와 상태 메시지를 위한 컨테이너
                 pdf_progress_container = st.empty()
                 pdf_status_container = st.empty()
@@ -1320,13 +1322,15 @@ def main():
                     
                     result_pdf = editor.create_book_pages(
                         tmp_file_path,
+                        book_width_mm=125,
+                        book_height_mm=175,
+                        split_direction=split_direction,
+                        use_first_page=use_first_page,
+                        page_order=page_order,
                         margin_top=margin_top,
                         margin_bottom=margin_bottom,
                         margin_outer=margin_outer,
                         margin_inner=margin_inner,
-                        split_direction=split_direction,
-                        use_first_page=use_first_page,
-                        page_order=page_order,
                         scale_factor_odd=scale_factor_odd,
                         offset_x_odd=offset_x_odd,
                         offset_y_odd=offset_y_odd,
@@ -1362,6 +1366,11 @@ def main():
                     pdf_progress_container.empty()
                     pdf_status_container.empty()
                     st.error(f"❌ 생성 중 오류가 발생했습니다: {str(e)}")
+                    
+                    # 디버그용 상세 오류 정보
+                    import traceback
+                    st.error("상세 오류 정보:")
+                    st.code(traceback.format_exc())
                 finally:
                     # 임시 파일 정리
                     if os.path.exists(tmp_file_path):
