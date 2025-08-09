@@ -379,123 +379,151 @@ class SplitPDFEditor:
         
         return preview_images
     
-    def create_book_pages(self, content_pdf_path, margin_top=15, margin_bottom=15, 
-                         margin_outer=15, margin_inner=15, split_direction='vertical',
-                         use_first_page=True, page_order="1234", 
+    def create_book_pages(self, content_pdf_path, book_width_mm=125, book_height_mm=175, 
+                         split_direction='vertical', use_first_page=True, page_order="1234",
+                         margin_top=15, margin_bottom=15, margin_outer=15, margin_inner=15,
                          scale_factor_odd=1.0, offset_x_odd=0, offset_y_odd=0,
                          scale_factor_even=1.0, offset_x_even=0, offset_y_even=0,
-                         show_borders=False):
-        """PDF 내용을 책 페이지 크기로 변환 - 홀수/짝수별 설정 적용"""
+                         show_borders=False, progress_callback=None):
+        """PDF를 분할하여 책 형태로 변환 (홀수/짝수 페이지별 설정 포함)"""
         
-        # 원본 PDF 읽기
-        doc = fitz.open(content_pdf_path)
+        # mm를 포인트로 변환 (1mm = 2.834645669 points)
+        book_width_pt = book_width_mm * 2.834645669
+        book_height_pt = book_height_mm * 2.834645669
         
         # 새 PDF 생성
-        output = io.BytesIO()
-        c = canvas.Canvas(output, pagesize=(self.book_width, self.book_height))
+        buffer = io.BytesIO()
+        c = canvas.Canvas(buffer, pagesize=(book_width_pt, book_height_pt))
         
+        # PDF 문서 열기
+        doc = fitz.open(content_pdf_path)
         all_pages = []
+        temp_files = []
         
-        # 모든 페이지를 분할하여 저장
-        for page_num in range(len(doc)):
-            page = doc[page_num]
-            rect = page.rect
-            
-            # 가로 페이지인지 확인
-            if rect.width > rect.height:
-                # 가로 페이지를 분할
-                left_pix, right_pix = self.split_landscape_page(page, split_direction)
-                
-                # 좌측 페이지
-                left_img_path = self.save_pixmap_to_image(left_pix, f"left_{page_num}")
-                all_pages.append(left_img_path)
-                
-                # 우측 페이지
-                right_img_path = self.save_pixmap_to_image(right_pix, f"right_{page_num}")
-                all_pages.append(right_img_path)
-                
-            else:
-                # 세로 페이지는 그대로 처리 (고해상도)
-                high_res_matrix = fitz.Matrix(4.0, 4.0)  # 고해상도 렌더링
-                pix = page.get_pixmap(matrix=high_res_matrix)
-                img_path = self.save_pixmap_to_image(pix, f"page_{page_num}")
-                all_pages.append(img_path)
+        total_pages = len(doc)
         
-        # 첫 페이지 사용 여부에 따라 조정
-        if not use_first_page and len(all_pages) > 0:
-            if os.path.exists(all_pages[0]):
-                os.unlink(all_pages[0])  # 첫 페이지 파일 삭제
-            all_pages = all_pages[1:]  # 첫 페이지 제거
-        
-        # 페이지 순서에 따라 재배열 (모든 페이지에 적용)
-        if page_order == "2341":
-            # 2341 순서: 4페이지 단위로 2,3,4,1 패턴 적용
-            reordered_pages = []
-            for i in range(0, len(all_pages), 4):
-                # 현재 4페이지 블록 가져오기
-                current_block = all_pages[i:i+4]
-                if len(current_block) >= 4:
-                    # 2,3,4,1 순서로 재배열
-                    reordered_block = [current_block[1], current_block[2], current_block[3], current_block[0]]
-                    reordered_pages.extend(reordered_block)
+        try:
+            # 모든 분할된 페이지 생성
+            for page_num in range(total_pages):
+                if progress_callback:
+                    progress_callback(page_num + 1, total_pages, f"페이지 {page_num + 1}/{total_pages} 분할 중...")
+                
+                page = doc[page_num]
+                rect = page.rect
+                
+                # 가로 페이지인지 확인
+                if rect.width > rect.height:
+                    # 가로 페이지를 분할 (고해상도)
+                    left_pix, right_pix = self.split_landscape_page(page, split_direction)
+                    
+                    # 좌측 페이지 저장
+                    left_filename = f"temp_left_{page_num}.png"
+                    self.save_pixmap_to_image(left_pix, left_filename)
+                    all_pages.append(left_filename)
+                    temp_files.append(left_filename)
+                    
+                    # 우측 페이지 저장
+                    right_filename = f"temp_right_{page_num}.png"
+                    self.save_pixmap_to_image(right_pix, right_filename)
+                    all_pages.append(right_filename)
+                    temp_files.append(right_filename)
+                    
                 else:
-                    # 4개 미만인 경우 그대로 추가
-                    reordered_pages.extend(current_block)
-        else:
-            # 1234 순서: 순서 그대로
-            reordered_pages = all_pages
-        
-        total_pages = 0
-        
-        # 모든 페이지를 PDF에 추가 (홀수/짝수별 여백 및 조정 적용)
-        for i, img_path in enumerate(reordered_pages):
-            if os.path.exists(img_path):
-                page_number = i + 1
-                margins = self.calculate_margins_for_page(page_number, margin_top, margin_bottom, margin_outer, margin_inner)
+                    # 세로 페이지는 그대로 (고해상도)
+                    matrix = fitz.Matrix(4.0, 4.0)  # 고해상도
+                    pix = page.get_pixmap(matrix=matrix)
+                    filename = f"temp_portrait_{page_num}.png"
+                    self.save_pixmap_to_image(pix, filename)
+                    all_pages.append(filename)
+                    temp_files.append(filename)
+            
+            doc.close()
+            
+            if progress_callback:
+                progress_callback(total_pages, total_pages, "페이지 순서 정리 중...")
+            
+            # 첫 페이지 사용 여부에 따라 조정
+            if not use_first_page and len(all_pages) > 0:
+                if os.path.exists(all_pages[0]):
+                    os.unlink(all_pages[0])  # 첫 페이지 파일 삭제
+                all_pages = all_pages[1:]  # 첫 페이지 제거
+            
+            # 페이지 순서에 따라 재배열 (모든 페이지에 적용)
+            if page_order == "2341":
+                # 2341 순서: 4페이지 단위로 2,3,4,1 패턴 적용
+                reordered_pages = []
+                for i in range(0, len(all_pages), 4):
+                    # 현재 4페이지 블록 가져오기
+                    current_block = all_pages[i:i+4]
+                    if len(current_block) >= 4:
+                        # 2,3,4,1 순서로 재배열
+                        reordered_block = [current_block[1], current_block[2], current_block[3], current_block[0]]
+                        reordered_pages.extend(reordered_block)
+                    else:
+                        # 4개 미만인 경우 그대로 추가
+                        reordered_pages.extend(current_block)
+            else:
+                # 1234 순서: 순서 그대로
+                reordered_pages = all_pages
+            
+            total_pages_to_process = len(reordered_pages)
+            
+            # 각 페이지를 책에 추가
+            for page_idx, image_path in enumerate(reordered_pages):
+                if progress_callback:
+                    progress_callback(page_idx + 1, total_pages_to_process, f"PDF 생성 중... {page_idx + 1}/{total_pages_to_process}")
                 
-                # 여백을 포인트로 변환
-                margin_top_pt = self.convert_mm_to_points(margins['top'])
-                margin_bottom_pt = self.convert_mm_to_points(margins['bottom'])
-                margin_left_pt = self.convert_mm_to_points(margins['left'])
-                margin_right_pt = self.convert_mm_to_points(margins['right'])
-                
-                # 사용 가능한 내용 영역 계산
-                content_width = self.book_width - margin_left_pt - margin_right_pt
-                content_height = self.book_height - margin_top_pt - margin_bottom_pt
-                
-                # 이미지를 페이지에 추가 (홀수/짝수별 축소 및 이동 적용)
-                self.add_page_to_book(
-                    c, img_path, content_width, content_height, 
-                    margin_left_pt, margin_bottom_pt, page_number,
-                    scale_factor_odd, offset_x_odd, offset_y_odd,
-                    scale_factor_even, offset_x_even, offset_y_even,
-                    show_borders, self.book_width, self.book_height
-                )
-                total_pages += 1
-                os.unlink(img_path)  # 임시 파일 삭제
+                if os.path.exists(image_path):
+                    # 페이지 번호 (1부터 시작)
+                    page_number = page_idx + 1
+                    
+                    # 해당 페이지의 여백 계산
+                    margins = self.calculate_margins_for_page(page_number, margin_top, margin_bottom, margin_outer, margin_inner)
+                    margin_left_pt = margins['left'] * 2.834645669
+                    margin_bottom_pt = margins['bottom'] * 2.834645669
+                    
+                    # 콘텐츠 영역 계산
+                    content_width = book_width_pt - (margins['left'] + margins['right']) * 2.834645669
+                    content_height = book_height_pt - (margins['top'] + margins['bottom']) * 2.834645669
+                    
+                    # 페이지를 책에 추가
+                    self.add_page_to_book(c, image_path, content_width, content_height, 
+                                        margin_left_pt, margin_bottom_pt, page_number,
+                                        scale_factor_odd, offset_x_odd, offset_y_odd,
+                                        scale_factor_even, offset_x_even, offset_y_even,
+                                        show_borders, book_width_pt, book_height_pt)
+            
+            if progress_callback:
+                progress_callback(total_pages_to_process, total_pages_to_process, "PDF 저장 중...")
+            
+            # PDF 저장
+            c.save()
+            
+        finally:
+            # 임시 파일 정리
+            for temp_file in temp_files:
+                if os.path.exists(temp_file):
+                    try:
+                        os.unlink(temp_file)
+                    except:
+                        pass  # 파일 삭제 실패 시 무시
         
-        c.save()
-        output.seek(0)
-        doc.close()
+        if progress_callback:
+            progress_callback(total_pages_to_process, total_pages_to_process, "PDF 생성 완료!")
         
-        # 남은 임시 파일들 정리
-        for img_path in all_pages:
-            if os.path.exists(img_path):
-                os.unlink(img_path)
-        
-        return output, total_pages
+        return buffer.getvalue()
     
     def save_pixmap_to_image(self, pixmap, filename):
-        """Pixmap을 고품질 이미지 파일로 저장"""
-        # PNG 대신 고품질 JPEG로 저장하여 용량 최적화하면서 품질 유지
+        """Pixmap을 최고품질 이미지 파일로 저장"""
+        # PNG로 최고품질 저장
         img_data = pixmap.tobytes("png")
         
-        # PIL을 통해 고품질로 재저장
+        # PIL을 통해 최고품질로 재저장
         with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as img_file:
-            # 원본 PNG 데이터를 PIL로 열어서 고품질로 재저장
+            # 원본 PNG 데이터를 PIL로 열어서 최고품질로 재저장
             pil_img = Image.open(io.BytesIO(img_data))
-            # 고품질 PNG로 저장 (압축 레벨 낮춤)
-            pil_img.save(img_file.name, 'PNG', compress_level=1, optimize=False)
+            # 최고품질 PNG로 저장 (압축 완전 비활성화)
+            pil_img.save(img_file.name, 'PNG', compress_level=0, optimize=False)
             return img_file.name
     
     def add_page_to_book(self, canvas_obj, image_path, content_width, content_height, 
@@ -560,8 +588,15 @@ class SplitPDFEditor:
         final_y = max(margin_bottom_pt, min(final_y, max_y))
         
         # 조정된 이미지를 새 페이지에 그리기
-        canvas_obj.drawImage(adjusted_img_path, final_x, final_y, 
-                           width=actual_width_pt, height=actual_height_pt)
+        # 고해상도를 위해 PIL Image 객체로 직접 그리기
+        from reportlab.lib.utils import ImageReader
+        
+        # PIL Image 객체로 열어서 고해상도 유지
+        with Image.open(adjusted_img_path) as pil_img:
+            img_reader = ImageReader(pil_img)
+            canvas_obj.drawImage(img_reader, final_x, final_y, 
+                               width=actual_width_pt, height=actual_height_pt,
+                               preserveAspectRatio=True, anchor='c')
         
         # 여백 경계선 그리기 (옵션)
         if show_borders and book_width and book_height:
@@ -633,10 +668,10 @@ class SplitPDFEditor:
             # 고품질 이미지 리사이즈
             resized_img = img.resize((int(new_width), int(new_height)), Image.Resampling.LANCZOS)
             
-            # 새 이미지 파일로 고품질 저장
+            # 새 이미지 파일로 최고품질 저장
             output_path = image_path.replace('.png', '_resized.png')
-            # PNG 압축 레벨을 낮춰서 품질 향상 (0=무압축, 9=최대압축)
-            resized_img.save(output_path, 'PNG', compress_level=1, optimize=False)
+            # PNG 압축을 완전히 비활성화하여 최고품질 보장 (0=무압축)
+            resized_img.save(output_path, 'PNG', compress_level=0, optimize=False)
             
             return output_path
 
@@ -1272,48 +1307,65 @@ def main():
             
             # 편집 버튼
             if st.button("📖 PDF 생성하기", type="primary"):
-                with st.spinner("PDF를 생성하는 중..."):
-                    try:
-                        result_pdf, actual_pages = editor.create_book_pages(
-                            tmp_file_path,
-                            margin_top=margin_top,
-                            margin_bottom=margin_bottom,
-                            margin_outer=margin_outer,
-                            margin_inner=margin_inner,
-                            split_direction=split_direction,
-                            use_first_page=use_first_page,
-                            page_order=page_order,
-                            scale_factor_odd=scale_factor_odd,
-                            offset_x_odd=offset_x_odd,
-                            offset_y_odd=offset_y_odd,
-                            scale_factor_even=scale_factor_even,
-                            offset_x_even=offset_x_even,
-                            offset_y_even=offset_y_even,
-                            show_borders=show_margin_borders
+                # 프로그래스바와 상태 메시지를 위한 컨테이너
+                pdf_progress_container = st.empty()
+                pdf_status_container = st.empty()
+                
+                try:
+                    # 프로그래스 콜백 함수 정의
+                    def update_pdf_progress(current, total, description):
+                        progress_value = current / total if total > 0 else 0
+                        pdf_progress_container.progress(progress_value)
+                        pdf_status_container.info(f"📊 {description}")
+                    
+                    result_pdf = editor.create_book_pages(
+                        tmp_file_path,
+                        margin_top=margin_top,
+                        margin_bottom=margin_bottom,
+                        margin_outer=margin_outer,
+                        margin_inner=margin_inner,
+                        split_direction=split_direction,
+                        use_first_page=use_first_page,
+                        page_order=page_order,
+                        scale_factor_odd=scale_factor_odd,
+                        offset_x_odd=offset_x_odd,
+                        offset_y_odd=offset_y_odd,
+                        scale_factor_even=scale_factor_even,
+                        offset_x_even=offset_x_even,
+                        offset_y_even=offset_y_even,
+                        show_borders=show_margin_borders,
+                        progress_callback=update_pdf_progress
+                    )
+                    
+                    # 프로그래스바와 상태 메시지 제거
+                    pdf_progress_container.empty()
+                    pdf_status_container.empty()
+                    
+                    # 결과 다운로드
+                    st.success(f"✅ PDF 생성 완료!")
+                    
+                    # 다운로드 버튼
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.download_button(
+                            label="📥 완성된 PDF 다운로드",
+                            data=result_pdf,
+                            file_name=f"book_{uploaded_file.name}",
+                            mime="application/pdf"
                         )
-                        
-                        # 결과 다운로드
-                        st.success(f"✅ PDF 생성 완료! (총 {actual_pages}페이지)")
-                        
-                        # 다운로드 버튼
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.download_button(
-                                label="📥 완성된 PDF 다운로드",
-                                data=result_pdf.getvalue(),
-                                file_name=f"book_{uploaded_file.name}",
-                                mime="application/pdf"
-                            )
-                        
-                        with col2:
-                            st.info("💡 **팁:** 홀수/짝수 페이지별로 여백이 적용되었습니다.")
-                        
-                    except Exception as e:
-                        st.error(f"❌ 생성 중 오류가 발생했습니다: {str(e)}")
-                    finally:
-                        # 임시 파일 정리
-                        if os.path.exists(tmp_file_path):
-                            os.unlink(tmp_file_path)
+                    
+                    with col2:
+                        st.info("💡 **팁:** 홀수/짝수 페이지별로 여백이 적용되었습니다.")
+                    
+                except Exception as e:
+                    # 프로그래스바와 상태 메시지 제거
+                    pdf_progress_container.empty()
+                    pdf_status_container.empty()
+                    st.error(f"❌ 생성 중 오류가 발생했습니다: {str(e)}")
+                finally:
+                    # 임시 파일 정리
+                    if os.path.exists(tmp_file_path):
+                        os.unlink(tmp_file_path)
         
         except Exception as e:
             st.error(f"PDF 분석 중 오류가 발생했습니다: {str(e)}")
