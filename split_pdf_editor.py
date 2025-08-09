@@ -422,29 +422,44 @@ class SplitPDFEditor:
                 page_width = float(media_box.width)
                 page_height = float(media_box.height)
                 
+                # 0 나눗셈 방지
+                if page_width <= 0 or page_height <= 0:
+                    print(f"경고: 잘못된 페이지 크기 - 너비: {page_width}, 높이: {page_height}")
+                    return page  # 원본 페이지 반환
+                
                 # 가로 페이지인지 확인
                 if page_width > page_height:
                     # 가로 페이지를 분할
                     if split_direction == 'vertical':
-                        # 좌측 페이지
-                        left_page = page
-                        left_page.mediabox.upper_right = (page_width / 2, page_height)
+                        # 좌측 페이지 생성
+                        left_page = reader.pages[page_num]
+                        # 새로운 mediabox 생성 (좌측 절반)
+                        from PyPDF2.generic import RectangleObject
+                        left_mediabox = RectangleObject([0, 0, page_width / 2, page_height])
+                        left_page.mediabox = left_mediabox
                         all_split_pages.append(('split_left', left_page, page_num))
                         
-                        # 우측 페이지 (새로운 페이지 객체 생성)
-                        right_page = reader.pages[page_num]  # 원본 페이지 복사
-                        right_page.mediabox.lower_left = (page_width / 2, 0)
+                        # 우측 페이지 생성 (독립적인 복사본)
+                        import copy
+                        right_page = copy.deepcopy(reader.pages[page_num])
+                        # 새로운 mediabox 생성 (우측 절반)
+                        right_mediabox = RectangleObject([page_width / 2, 0, page_width, page_height])
+                        right_page.mediabox = right_mediabox
                         all_split_pages.append(('split_right', right_page, page_num))
                     else:
                         # 상하 분할
                         # 상단 페이지
-                        top_page = page
-                        top_page.mediabox.lower_left = (0, page_height / 2)
+                        top_page = reader.pages[page_num]
+                        from PyPDF2.generic import RectangleObject
+                        top_mediabox = RectangleObject([0, page_height / 2, page_width, page_height])
+                        top_page.mediabox = top_mediabox
                         all_split_pages.append(('split_top', top_page, page_num))
                         
                         # 하단 페이지
-                        bottom_page = reader.pages[page_num]
-                        bottom_page.mediabox.upper_right = (page_width, page_height / 2)
+                        import copy
+                        bottom_page = copy.deepcopy(reader.pages[page_num])
+                        bottom_mediabox = RectangleObject([0, 0, page_width, page_height / 2])
+                        bottom_page.mediabox = bottom_mediabox
                         all_split_pages.append(('split_bottom', bottom_page, page_num))
                 else:
                     # 세로 페이지는 그대로
@@ -552,10 +567,21 @@ class SplitPDFEditor:
         content_width = book_width_pt - margin_left_pt - margin_right_pt
         content_height = book_height_pt - margin_top_pt - margin_bottom_pt
         
+        # 콘텐츠 영역 검증
+        if content_width <= 0 or content_height <= 0:
+            print(f"경고: 잘못된 콘텐츠 영역 - 너비: {content_width}, 높이: {content_height}")
+            print(f"책 크기: {book_width_pt}x{book_height_pt}, 여백: L{margin_left_pt} R{margin_right_pt} T{margin_top_pt} B{margin_bottom_pt}")
+            return page  # 원본 페이지 반환
+        
         # 페이지 크기
         media_box = page.mediabox
         page_width = float(media_box.width)
         page_height = float(media_box.height)
+        
+        # 0 나눗셈 방지
+        if page_width <= 0 or page_height <= 0:
+            print(f"경고: 잘못된 페이지 크기 - 너비: {page_width}, 높이: {page_height}")
+            return page  # 원본 페이지 반환
         
         # 스케일링 비율 계산 (콘텐츠 영역에 맞춤)
         scale_x = (content_width * scale_factor) / page_width
