@@ -47,29 +47,87 @@ class SplitPDFEditor:
             'right': margin_right
         }
     
-    def add_margin_borders_to_image(self, image_data, page_number, margin_top, margin_bottom, margin_outer, margin_inner):
-        """이미지에 여백 경계선을 추가"""
+    def add_margin_borders_to_image(self, image_data, page_number, margin_top, margin_bottom, 
+                                   margin_outer, margin_inner, 
+                                   scale_factor_odd=1.0, offset_x_odd=0, offset_y_odd=0,
+                                   scale_factor_even=1.0, offset_x_even=0, offset_y_even=0):
+        """이미지에 여백 경계선을 추가하고 축소/이동 효과 적용 (홀수/짝수 페이지별)"""
+        
+        # 홀수/짝수 페이지에 따라 다른 설정 사용
+        if page_number % 2 == 1:  # 홀수 페이지
+            scale_factor = scale_factor_odd
+            offset_x = offset_x_odd
+            offset_y = offset_y_odd
+        else:  # 짝수 페이지
+            scale_factor = scale_factor_even
+            offset_x = offset_x_even
+            offset_y = offset_y_even
+        
         # PIL Image로 변환
-        image = Image.open(io.BytesIO(image_data))
+        original_image = Image.open(io.BytesIO(image_data))
         
         # 이미지 크기
-        img_width, img_height = image.size
+        img_width, img_height = original_image.size
         
         # 여백 계산 (픽셀 단위로 변환)
         margins = self.calculate_margins_for_page(page_number, margin_top, margin_bottom, margin_outer, margin_inner)
         
         # 125x175mm 비율로 여백을 픽셀로 변환
-        # 이미지 크기를 125x175 비율로 가정
         margin_left_px = int((margins['left'] / 125) * img_width)
         margin_right_px = int((margins['right'] / 125) * img_width)
         margin_top_px = int((margins['top'] / 175) * img_height)
         margin_bottom_px = int((margins['bottom'] / 175) * img_height)
         
-        # 경계선 그리기
-        draw = ImageDraw.Draw(image)
+        # 컨텐츠 영역 계산
+        content_width_px = img_width - margin_left_px - margin_right_px
+        content_height_px = img_height - margin_top_px - margin_bottom_px
         
-        # 빨간색 경계선으로 여백 표시
-        border_color = (255, 0, 0)  # 빨간색
+        # 축소된 컨텐츠 크기 계산
+        scaled_content_width_px = int(content_width_px * scale_factor)
+        scaled_content_height_px = int(content_height_px * scale_factor)
+        
+        # 여유 공간 계산 (축소로 인한)
+        extra_space_x_px = content_width_px - scaled_content_width_px
+        extra_space_y_px = content_height_px - scaled_content_height_px
+        
+        # 중앙 정렬 + 사용자 오프셋
+        offset_x_px = int((offset_x / 125) * img_width)  # mm를 픽셀로 변환
+        offset_y_px = int((offset_y / 175) * img_height)
+        
+        content_start_x = margin_left_px + (extra_space_x_px // 2) + offset_x_px
+        content_start_y = margin_top_px + (extra_space_y_px // 2) + offset_y_px
+        
+        # 새로운 이미지 생성 (흰색 배경)
+        result_image = Image.new('RGB', (img_width, img_height), 'white')
+        
+        # 축소된 원본 이미지를 새 위치에 붙여넣기
+        if scale_factor < 1.0:
+            # 원본 이미지를 축소
+            resized_original = original_image.resize((scaled_content_width_px, scaled_content_height_px), Image.Resampling.LANCZOS)
+            
+            # 경계 체크
+            paste_x = max(margin_left_px, min(content_start_x, margin_left_px + content_width_px - scaled_content_width_px))
+            paste_y = max(margin_top_px, min(content_start_y, margin_top_px + content_height_px - scaled_content_height_px))
+            
+            result_image.paste(resized_original, (paste_x, paste_y))
+        else:
+            # 축소 없이 이동만 적용
+            paste_x = max(margin_left_px, min(content_start_x, margin_left_px + content_width_px - content_width_px))
+            paste_y = max(margin_top_px, min(content_start_y, margin_top_px + content_height_px - content_height_px))
+            
+            # 컨텐츠 영역만 잘라서 붙여넣기
+            content_crop = original_image.crop((0, 0, content_width_px, content_height_px))
+            result_image.paste(content_crop, (paste_x, paste_y))
+        
+        # 경계선 그리기
+        draw = ImageDraw.Draw(result_image)
+        
+        # 홀수/짝수 페이지에 따라 다른 색상의 경계선
+        if page_number % 2 == 1:  # 홀수 페이지
+            border_color = (255, 0, 0)  # 빨간색
+        else:  # 짝수 페이지
+            border_color = (0, 0, 255)  # 파란색
+        
         border_width = 2
         
         # 상단 경계선
@@ -90,7 +148,7 @@ class SplitPDFEditor:
         
         # 이미지를 바이트로 변환하여 반환
         output = io.BytesIO()
-        image.save(output, format='PNG')
+        result_image.save(output, format='PNG')
         return output.getvalue()
     
     def analyze_pdf_content(self, pdf_path):
@@ -149,8 +207,10 @@ class SplitPDFEditor:
     
     def generate_preview_images(self, content_pdf_path, split_direction='vertical', 
                               max_pages=4, use_first_page=True, page_order="1234",
-                              margin_top=15, margin_bottom=15, margin_outer=15, margin_inner=15):
-        """미리보기용 이미지 생성 (여백 정보 포함)"""
+                              margin_top=15, margin_bottom=15, margin_outer=15, margin_inner=15,
+                              scale_factor_odd=1.0, offset_x_odd=0, offset_y_odd=0,
+                              scale_factor_even=1.0, offset_x_even=0, offset_y_even=0):
+        """미리보기용 이미지 생성 (홀수/짝수 페이지별 설정 포함)"""
         doc = fitz.open(content_pdf_path)
         all_pages = []
         
@@ -217,15 +277,29 @@ class SplitPDFEditor:
         else:
             reordered_pages = all_pages
         
-        # 최종 미리보기 이미지 생성 (여백 정보 및 경계선 포함)
+        # 최종 미리보기 이미지 생성 (홀수/짝수별 여백 정보 및 경계선 포함)
         preview_images = []
         for i, page_info in enumerate(reordered_pages[:max_pages]):
             page_number = i + 1
             margins = self.calculate_margins_for_page(page_number, margin_top, margin_bottom, margin_outer, margin_inner)
             
-            # 여백 경계선이 추가된 이미지 생성
+            # 홀수/짝수별 설정 정보
+            if page_number % 2 == 1:  # 홀수 페이지
+                current_scale = scale_factor_odd
+                current_offset_x = offset_x_odd
+                current_offset_y = offset_y_odd
+                page_type = "홀수"
+            else:  # 짝수 페이지
+                current_scale = scale_factor_even
+                current_offset_x = offset_x_even
+                current_offset_y = offset_y_even
+                page_type = "짝수"
+            
+            # 여백 경계선이 추가된 이미지 생성 (홀수/짝수별 축소/이동 효과 포함)
             bordered_image_data = self.add_margin_borders_to_image(
-                page_info['image_data'], page_number, margin_top, margin_bottom, margin_outer, margin_inner
+                page_info['image_data'], page_number, margin_top, margin_bottom, margin_outer, margin_inner,
+                scale_factor_odd, offset_x_odd, offset_y_odd,
+                scale_factor_even, offset_x_even, offset_y_even
             )
             
             preview_images.append({
@@ -233,16 +307,19 @@ class SplitPDFEditor:
                 'image_data': bordered_image_data,
                 'description': f"페이지 {page_number} ({page_info['description']})",
                 'margins': margins,
-                'margin_info': f"위{margins['top']}mm, 아래{margins['bottom']}mm, 왼쪽{margins['left']}mm, 오른쪽{margins['right']}mm"
+                'margin_info': f"위{margins['top']}mm, 아래{margins['bottom']}mm, 왼쪽{margins['left']}mm, 오른쪽{margins['right']}mm",
+                'page_type': page_type,
+                'scale_info': f"축소{int(current_scale*100)}%, 이동({current_offset_x:+.0f},{current_offset_y:+.0f}mm)"
             })
         
         return preview_images
     
     def create_book_pages(self, content_pdf_path, margin_top=15, margin_bottom=15, 
                          margin_outer=15, margin_inner=15, split_direction='vertical',
-                         use_first_page=True, page_order="1234", scale_factor=1.0,
-                         offset_x=0, offset_y=0):
-        """PDF 내용을 책 페이지 크기로 변환 - 모든 페이지에 적용"""
+                         use_first_page=True, page_order="1234", 
+                         scale_factor_odd=1.0, offset_x_odd=0, offset_y_odd=0,
+                         scale_factor_even=1.0, offset_x_even=0, offset_y_even=0):
+        """PDF 내용을 책 페이지 크기로 변환 - 홀수/짝수별 설정 적용"""
         
         # 원본 PDF 읽기
         doc = fitz.open(content_pdf_path)
@@ -296,7 +373,7 @@ class SplitPDFEditor:
         
         total_pages = 0
         
-        # 모든 페이지를 PDF에 추가 (각 페이지별 여백 적용)
+        # 모든 페이지를 PDF에 추가 (홀수/짝수별 여백 및 조정 적용)
         for i, img_path in enumerate(reordered_pages):
             if os.path.exists(img_path):
                 page_number = i + 1
@@ -312,10 +389,12 @@ class SplitPDFEditor:
                 content_width = self.book_width - margin_left_pt - margin_right_pt
                 content_height = self.book_height - margin_top_pt - margin_bottom_pt
                 
-                # 이미지를 페이지에 추가 (축소 및 이동 적용)
+                # 이미지를 페이지에 추가 (홀수/짝수별 축소 및 이동 적용)
                 self.add_page_to_book(
                     c, img_path, content_width, content_height, 
-                    margin_left_pt, margin_bottom_pt, scale_factor, offset_x, offset_y
+                    margin_left_pt, margin_bottom_pt, page_number,
+                    scale_factor_odd, offset_x_odd, offset_y_odd,
+                    scale_factor_even, offset_x_even, offset_y_even
                 )
                 total_pages += 1
                 os.unlink(img_path)  # 임시 파일 삭제
@@ -340,28 +419,64 @@ class SplitPDFEditor:
             return img_file.name
     
     def add_page_to_book(self, canvas_obj, image_path, content_width, content_height, 
-                        margin_left_pt, margin_bottom_pt, scale_factor=1.0, 
-                        offset_x=0, offset_y=0):
-        """이미지를 책 페이지에 추가 (축소 및 이동 기능 포함)"""
-        # 이미지 크기 조정
+                        margin_left_pt, margin_bottom_pt, page_number,
+                        scale_factor_odd=1.0, offset_x_odd=0, offset_y_odd=0,
+                        scale_factor_even=1.0, offset_x_even=0, offset_y_even=0):
+        """이미지를 책 페이지에 추가 (홀수/짝수 페이지별 축소 및 이동 기능)"""
+        
+        # 홀수/짝수 페이지에 따라 다른 설정 사용
+        if page_number % 2 == 1:  # 홀수 페이지
+            scale_factor = scale_factor_odd
+            offset_x = offset_x_odd
+            offset_y = offset_y_odd
+        else:  # 짝수 페이지
+            scale_factor = scale_factor_even
+            offset_x = offset_x_even
+            offset_y = offset_y_even
+        
+        # 원본 이미지 크기 확인
+        with Image.open(image_path) as img:
+            original_width, original_height = img.size
+        
+        # 축소된 크기 계산 (실제 컨텐츠 영역 내에서)
+        scaled_content_width = content_width * scale_factor
+        scaled_content_height = content_height * scale_factor
+        
+        # 이미지를 축소된 크기에 맞게 조정
         adjusted_img_path = self.adjust_image_for_book(
-            image_path, content_width * scale_factor, content_height * scale_factor, 'fit_both'
+            image_path, scaled_content_width, scaled_content_height, 'fit_both'
         )
         
-        # 축소된 이미지의 실제 크기 계산
-        with Image.open(adjusted_img_path) as img:
-            actual_width, actual_height = img.size
-            # 포인트 단위로 변환
-            actual_width_pt = actual_width * 72 / img.info.get('dpi', (72, 72))[0] if 'dpi' in img.info else actual_width
-            actual_height_pt = actual_height * 72 / img.info.get('dpi', (72, 72))[1] if 'dpi' in img.info else actual_height
+        # 조정된 이미지의 실제 크기 확인
+        with Image.open(adjusted_img_path) as adjusted_img:
+            actual_img_width, actual_img_height = adjusted_img.size
         
-        # 중앙 정렬을 위한 오프셋 계산
-        center_offset_x = (content_width - actual_width_pt) / 2
-        center_offset_y = (content_height - actual_height_pt) / 2
+        # PIL 이미지 크기를 포인트로 변환 (72 DPI 기준)
+        actual_width_pt = actual_img_width * 72 / 72  # 1:1 비율
+        actual_height_pt = actual_img_height * 72 / 72
         
-        # 최종 위치 계산 (중앙 정렬 + 사용자 오프셋)
-        final_x = margin_left_pt + center_offset_x + self.convert_mm_to_points(offset_x)
-        final_y = margin_bottom_pt + center_offset_y + self.convert_mm_to_points(offset_y)
+        # 축소로 인한 여유 공간 계산
+        extra_space_x = content_width - actual_width_pt
+        extra_space_y = content_height - actual_height_pt
+        
+        # 중앙 정렬을 위한 기본 오프셋
+        center_offset_x = extra_space_x / 2
+        center_offset_y = extra_space_y / 2
+        
+        # 사용자 지정 오프셋 (mm를 포인트로 변환)
+        user_offset_x = self.convert_mm_to_points(offset_x)
+        user_offset_y = self.convert_mm_to_points(offset_y)
+        
+        # 최종 위치 계산
+        final_x = margin_left_pt + center_offset_x + user_offset_x
+        final_y = margin_bottom_pt + center_offset_y + user_offset_y
+        
+        # 경계 체크 (이미지가 페이지를 벗어나지 않도록)
+        max_x = margin_left_pt + content_width - actual_width_pt
+        max_y = margin_bottom_pt + content_height - actual_height_pt
+        
+        final_x = max(margin_left_pt, min(final_x, max_x))
+        final_y = max(margin_bottom_pt, min(final_y, max_y))
         
         # 조정된 이미지를 새 페이지에 그리기
         canvas_obj.drawImage(adjusted_img_path, final_x, final_y, 
@@ -558,41 +673,61 @@ def main():
             
             # 페이지 조정 설정
             st.subheader("🎛️ 페이지 조정")
-            st.markdown("**페이지 축소 및 위치 조정**")
+            st.markdown("**홀수/짝수 페이지별 축소 및 위치 조정**")
             
-            col1, col2, col3, col4, col5 = st.columns(5)
+            # 홀수 페이지 설정
+            st.markdown("#### 📄 홀수 페이지 (1, 3, 5...) - 빨간색 경계선")
+            col1, col2, col3, col4 = st.columns(4)
             
             with col1:
-                scale_factor = st.slider("축소 비율", 0.5, 1.0, 1.0, 0.05, help="페이지 축소 비율 (1.0 = 원본 크기)")
+                scale_factor_odd = st.slider("홀수 축소 비율", 0.5, 1.0, 1.0, 0.05, help="홀수 페이지 축소 비율 (1.0 = 원본 크기)")
             
             with col2:
-                offset_x = st.slider("좌우 이동", -20, 20, 0, 1, help="페이지를 좌우로 이동 (mm)")
+                offset_x_odd = st.slider("홀수 좌우 이동", -20, 20, 0, 1, help="홀수 페이지를 좌우로 이동 (mm)")
             
             with col3:
-                offset_y = st.slider("상하 이동", -20, 20, 0, 1, help="페이지를 상하로 이동 (mm)")
+                offset_y_odd = st.slider("홀수 상하 이동", -20, 20, 0, 1, help="홀수 페이지를 상하로 이동 (mm)")
             
             with col4:
-                st.markdown("**축소 가이드**")
-                st.write(f"현재: {int(scale_factor*100)}%")
-                if scale_factor < 0.8:
-                    st.warning("⚠️ 너무 작음")
-                elif scale_factor < 0.9:
-                    st.info("ℹ️ 적당함")
-                else:
-                    st.success("✅ 원본 크기")
+                st.markdown("**홀수 페이지 상태**")
+                st.write(f"축소: {int(scale_factor_odd*100)}%")
+                direction_odd = ""
+                if offset_x_odd > 0:
+                    direction_odd += "→"
+                elif offset_x_odd < 0:
+                    direction_odd += "←"
+                if offset_y_odd > 0:
+                    direction_odd += "↑"
+                elif offset_y_odd < 0:
+                    direction_odd += "↓"
+                st.write(f"이동: {direction_odd if direction_odd else '중앙'}")
             
-            with col5:
-                st.markdown("**이동 가이드**")
-                direction = ""
-                if offset_x > 0:
-                    direction += "→ "
-                elif offset_x < 0:
-                    direction += "← "
-                if offset_y > 0:
-                    direction += "↑"
-                elif offset_y < 0:
-                    direction += "↓"
-                st.write(f"방향: {direction if direction else '중앙'}")
+            # 짝수 페이지 설정
+            st.markdown("#### 📄 짝수 페이지 (2, 4, 6...) - 파란색 경계선")
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                scale_factor_even = st.slider("짝수 축소 비율", 0.5, 1.0, 1.0, 0.05, help="짝수 페이지 축소 비율 (1.0 = 원본 크기)")
+            
+            with col2:
+                offset_x_even = st.slider("짝수 좌우 이동", -20, 20, 0, 1, help="짝수 페이지를 좌우로 이동 (mm)")
+            
+            with col3:
+                offset_y_even = st.slider("짝수 상하 이동", -20, 20, 0, 1, help="짝수 페이지를 상하로 이동 (mm)")
+            
+            with col4:
+                st.markdown("**짝수 페이지 상태**")
+                st.write(f"축소: {int(scale_factor_even*100)}%")
+                direction_even = ""
+                if offset_x_even > 0:
+                    direction_even += "→"
+                elif offset_x_even < 0:
+                    direction_even += "←"
+                if offset_y_even > 0:
+                    direction_even += "↑"
+                elif offset_y_even < 0:
+                    direction_even += "↓"
+                st.write(f"이동: {direction_even if direction_even else '중앙'}")
             
             # 페이지 조정 설명
             st.markdown("""
@@ -617,7 +752,13 @@ def main():
                             margin_top=margin_top,
                             margin_bottom=margin_bottom,
                             margin_outer=margin_outer,
-                            margin_inner=margin_inner
+                            margin_inner=margin_inner,
+                            scale_factor_odd=scale_factor_odd,
+                            offset_x_odd=offset_x_odd,
+                            offset_y_odd=offset_y_odd,
+                            scale_factor_even=scale_factor_even,
+                            offset_x_even=offset_x_even,
+                            offset_y_even=offset_y_even
                         )
                         
                         if preview_images:
@@ -628,9 +769,17 @@ def main():
                                 with cols[col_idx]:
                                     st.write(f"**{img_info['description']}**")
                                     st.write(f"*여백: {img_info['margin_info']}*")
+                                    st.write(f"*조정: {img_info['scale_info']}*")
+                                    
+                                    # 홀수/짝수에 따른 색상 표시
+                                    if img_info['page_type'] == '홀수':
+                                        border_info = "🔴 홀수 페이지 (빨간 경계선)"
+                                    else:
+                                        border_info = "🔵 짝수 페이지 (파란 경계선)"
+                                    
                                     st.image(
                                         img_info['image_data'], 
-                                        caption=f"최종 페이지 {img_info['page_number']} ({'홀수' if img_info['page_number'] % 2 == 1 else '짝수'} 페이지)",
+                                        caption=f"최종 페이지 {img_info['page_number']} - {border_info}",
                                         use_column_width=True
                                     )
                         else:
@@ -652,9 +801,12 @@ def main():
                             split_direction=split_direction,
                             use_first_page=use_first_page,
                             page_order=page_order,
-                            scale_factor=scale_factor,
-                            offset_x=offset_x,
-                            offset_y=offset_y
+                            scale_factor_odd=scale_factor_odd,
+                            offset_x_odd=offset_x_odd,
+                            offset_y_odd=offset_y_odd,
+                            scale_factor_even=scale_factor_even,
+                            offset_x_even=offset_x_even,
+                            offset_y_even=offset_y_even
                         )
                         
                         # 결과 다운로드
