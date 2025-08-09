@@ -259,21 +259,18 @@ class SplitPDFEditor:
         if not use_first_page and len(all_pages) > 0:
             all_pages = all_pages[1:]  # 첫 페이지 제거
         
-        # 페이지 순서에 따라 재배열
-        if len(all_pages) >= 4:
-            selected_pages = all_pages[:4]  # 처음 4페이지 선택
-            
-            # 페이지 순서 매핑
+        # 페이지 순서에 따라 재배열 (모든 페이지에 적용)
+        if len(all_pages) > 0:
+            # 페이지 순서 매핑을 전체 페이지에 적용
             order_map = {
-                "1234": [0, 1, 2, 3],
-                "2341": [1, 2, 3, 0]
+                "1234": lambda pages: pages,  # 순서 그대로
+                "2341": lambda pages: pages[1:] + [pages[0]] if len(pages) > 0 else pages  # 첫 페이지를 마지막으로
             }
             
             if page_order in order_map:
-                indices = order_map[page_order]
-                reordered_pages = [selected_pages[i] for i in indices if i < len(selected_pages)]
+                reordered_pages = order_map[page_order](all_pages)
             else:
-                reordered_pages = selected_pages
+                reordered_pages = all_pages
         else:
             reordered_pages = all_pages
         
@@ -576,7 +573,6 @@ def main():
     # 미리보기 설정
     st.sidebar.subheader("미리보기 설정")
     show_preview = st.sidebar.checkbox("분할 미리보기 표시", value=True)
-    preview_pages = st.sidebar.slider("미리보기 페이지 수", 2, 8, 4)
     
     # 파일 업로드
     uploaded_file = st.file_uploader(
@@ -741,12 +737,17 @@ def main():
             if show_preview and analysis['is_landscape']:
                 st.subheader("🔍 분할 미리보기")
                 
+                # 세션 상태에 현재 페이지 저장
+                if 'preview_page_start' not in st.session_state:
+                    st.session_state.preview_page_start = 0
+                
                 with st.spinner("미리보기 이미지를 생성하는 중..."):
                     try:
-                        preview_images = editor.generate_preview_images(
+                        # 전체 미리보기 이미지 생성 (모든 페이지)
+                        all_preview_images = editor.generate_preview_images(
                             tmp_file_path, 
                             split_direction=split_direction,
-                            max_pages=preview_pages,
+                            max_pages=999,  # 모든 페이지 가져오기
                             use_first_page=use_first_page,
                             page_order=page_order,
                             margin_top=margin_top,
@@ -761,27 +762,61 @@ def main():
                             offset_y_even=offset_y_even
                         )
                         
-                        if preview_images:
-                            # 2열로 미리보기 표시
-                            cols = st.columns(2)
-                            for i, img_info in enumerate(preview_images):
-                                col_idx = i % 2
-                                with cols[col_idx]:
-                                    st.write(f"**{img_info['description']}**")
-                                    st.write(f"*여백: {img_info['margin_info']}*")
-                                    st.write(f"*조정: {img_info['scale_info']}*")
-                                    
-                                    # 홀수/짝수에 따른 색상 표시
-                                    if img_info['page_type'] == '홀수':
-                                        border_info = "🔴 홀수 페이지 (빨간 경계선)"
-                                    else:
-                                        border_info = "🔵 짝수 페이지 (파란 경계선)"
-                                    
-                                    st.image(
-                                        img_info['image_data'], 
-                                        caption=f"최종 페이지 {img_info['page_number']} - {border_info}",
-                                        use_column_width=True
-                                    )
+                        if all_preview_images:
+                            total_pages = len(all_preview_images)
+                            current_start = st.session_state.preview_page_start
+                            current_end = min(current_start + 4, total_pages)
+                            
+                            # 페이지 네비게이션 컨트롤
+                            col1, col2, col3, col4, col5 = st.columns([1, 1, 2, 1, 1])
+                            
+                            with col1:
+                                if st.button("⏮️ 처음", disabled=(current_start == 0)):
+                                    st.session_state.preview_page_start = 0
+                                    st.rerun()
+                            
+                            with col2:
+                                if st.button("◀️ 이전", disabled=(current_start == 0)):
+                                    st.session_state.preview_page_start = max(0, current_start - 4)
+                                    st.rerun()
+                            
+                            with col3:
+                                st.write(f"**페이지 {current_start + 1}-{current_end} / 총 {total_pages}페이지**")
+                            
+                            with col4:
+                                if st.button("다음 ▶️", disabled=(current_end >= total_pages)):
+                                    st.session_state.preview_page_start = min(current_start + 4, total_pages - 4)
+                                    st.rerun()
+                            
+                            with col5:
+                                if st.button("마지막 ⏭️", disabled=(current_end >= total_pages)):
+                                    st.session_state.preview_page_start = max(0, total_pages - 4)
+                                    st.rerun()
+                            
+                            # 현재 페이지 범위의 미리보기 표시
+                            current_preview_images = all_preview_images[current_start:current_end]
+                            
+                            if current_preview_images:
+                                # 2열로 미리보기 표시
+                                cols = st.columns(2)
+                                for i, img_info in enumerate(current_preview_images):
+                                    col_idx = i % 2
+                                    with cols[col_idx]:
+                                        st.write(f"**{img_info['description']}**")
+                                        st.write(f"*여백: {img_info['margin_info']}*")
+                                        st.write(f"*조정: {img_info['scale_info']}*")
+                                        
+                                        # 홀수/짝수에 따른 색상 표시
+                                        if img_info['page_type'] == '홀수':
+                                            border_info = "🔴 홀수 페이지 (빨간 경계선)"
+                                        else:
+                                            border_info = "🔵 짝수 페이지 (파란 경계선)"
+                                        
+                                        st.image(
+                                            img_info['image_data'], 
+                                            caption=f"최종 페이지 {img_info['page_number']} - {border_info}",
+                                            use_column_width=True
+                                        )
                         else:
                             st.warning("미리보기 이미지를 생성할 수 없습니다.")
                             
@@ -872,9 +907,11 @@ def main():
         
         ### 🔍 미리보기 기능
         
+        - **페이지 네비게이션**: 4개 페이지 단위로 미리보기 탐색
         - **실시간 미리보기**: 설정 변경 시 자동으로 미리보기 업데이트
         - **여백 정보**: 각 페이지별 여백 정보 표시
-        - **홀수/짝수 구분**: 페이지 번호에 따른 여백 적용 확인
+        - **홀수/짝수 구분**: 빨간색(홀수)/파란색(짝수) 경계선으로 구분
+        - **조정 정보**: 각 페이지별 축소 비율과 이동 정보 표시
         
         ### ⚠️ 주의사항
         
