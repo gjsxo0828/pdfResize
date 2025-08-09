@@ -815,18 +815,18 @@ def main():
         st.divider()
         
         # 여백 설정
-        st.subheader("📏 여백 설정")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            margin_top = st.number_input("위쪽 (mm)", min_value=0, max_value=50, value=15, step=1)
-            margin_outer = st.number_input("바깥쪽 (mm)", min_value=0, max_value=50, value=15, step=1)
-        
-        with col2:
-            margin_bottom = st.number_input("아래쪽 (mm)", min_value=0, max_value=50, value=15, step=1)
-            margin_inner = st.number_input("안쪽 (mm)", min_value=0, max_value=50, value=15, step=1)
-        
-        st.info("💡 홀수 페이지: 왼쪽=바깥쪽, 오른쪽=안쪽 / 짝수 페이지: 왼쪽=안쪽, 오른쪽=바깥쪽")
+        with st.expander("📏 여백 설정", expanded=False):
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                margin_top = st.number_input("위쪽 (mm)", min_value=0, max_value=50, value=15, step=1)
+                margin_outer = st.number_input("바깥쪽 (mm)", min_value=0, max_value=50, value=15, step=1)
+            
+            with col2:
+                margin_bottom = st.number_input("아래쪽 (mm)", min_value=0, max_value=50, value=15, step=1)
+                margin_inner = st.number_input("안쪽 (mm)", min_value=0, max_value=50, value=15, step=1)
+            
+            st.info("💡 홀수 페이지: 왼쪽=바깥쪽, 오른쪽=안쪽 / 짝수 페이지: 왼쪽=안쪽, 오른쪽=바깥쪽")
         
         st.divider()
         
@@ -839,15 +839,15 @@ def main():
             col1, col2 = st.columns(2)
             with col1:
                 st.write("🔴 홀수 페이지 (1,3,5...)")
-                scale_odd = st.number_input("축소 비율", min_value=0.10, max_value=2.00, value=1.00, step=0.01, key="scale_odd")
-                offset_x_odd = st.number_input("좌우 이동", min_value=-50.0, max_value=50.0, value=0.0, step=0.1, key="offset_x_odd")
-                offset_y_odd = st.number_input("상하 이동", min_value=-50.0, max_value=50.0, value=0.0, step=0.1, key="offset_y_odd")
+                scale_odd = st.number_input("축소 비율", min_value=0.10, max_value=2.00, value=1.00, step=0.01, format="%.2f", key="scale_odd")
+                offset_x_odd = st.number_input("좌우 이동", min_value=-50.0, max_value=50.0, value=0.0, step=0.1, format="%.1f", key="offset_x_odd")
+                offset_y_odd = st.number_input("상하 이동", min_value=-50.0, max_value=50.0, value=0.0, step=0.1, format="%.1f", key="offset_y_odd")
             
             with col2:
                 st.write("🔵 짝수 페이지 (2,4,6...)")
-                scale_even = st.number_input("축소 비율", min_value=0.10, max_value=2.00, value=1.00, step=0.01, key="scale_even")
-                offset_x_even = st.number_input("좌우 이동", min_value=-50.0, max_value=50.0, value=0.0, step=0.1, key="offset_x_even")
-                offset_y_even = st.number_input("상하 이동", min_value=-50.0, max_value=50.0, value=0.0, step=0.1, key="offset_y_even")
+                scale_even = st.number_input("축소 비율", min_value=0.10, max_value=2.00, value=1.00, step=0.01, format="%.2f", key="scale_even")
+                offset_x_even = st.number_input("좌우 이동", min_value=-50.0, max_value=50.0, value=0.0, step=0.1, format="%.1f", key="offset_x_even")
+                offset_y_even = st.number_input("상하 이동", min_value=-50.0, max_value=50.0, value=0.0, step=0.1, format="%.1f", key="offset_y_even")
             
             st.divider()
             
@@ -860,15 +860,19 @@ def main():
                 st.session_state.individual_settings = {}
             
             # PDF가 분할된 경우에만 개별 조정 가능
-            if 'split_pages' in st.session_state and st.session_state.split_pages:
+            if ('split_pages' in st.session_state and 
+                st.session_state.split_pages and 
+                len(st.session_state.split_pages) > 0):
                 max_pages = len(st.session_state.split_pages)
                 
                 # 페이지 추가
-                col1, col2 = st.columns([3, 1])
+                col1, col2 = st.columns([4, 1])
                 with col1:
                     page_to_add = st.selectbox("미세조정할 페이지 선택", range(1, max_pages + 1), key="page_selector")
                 with col2:
-                    if st.button("페이지 추가", key="add_page_btn"):
+                    # selectbox의 입력 필드와 같은 높이에 버튼 배치
+                    st.write("　")  # 라벨 높이만큼 공백
+                    if st.button("➕", key="add_page_btn", help="선택한 페이지를 개별 조정 목록에 추가", use_container_width=True):
                         if page_to_add not in st.session_state.individual_settings:
                             # 기본값으로 초기화 (홀수/짝수에 따라)
                             if page_to_add % 2 == 1:  # 홀수
@@ -905,17 +909,26 @@ def main():
                             base_offset_y = offset_y_even
                             page_type = "🔵 짝수"
                         
-                        st.write(f"📄 **페이지 {page_num}** ({page_type})")
+                        # 페이지 제목과 삭제 버튼을 같은 줄에 배치
+                        title_col, remove_col = st.columns([4, 1])
+                        with title_col:
+                            st.write(f"📄 **페이지 {page_num}** ({page_type})")
+                        with remove_col:
+                            if st.button("🗑️", key=f"remove_page_{page_num}", help="이 페이지 조정 제거"):
+                                pages_to_remove.append(page_num)
+                        
                         st.caption(f"기본값: 축소 {base_scale:.2f}, 좌우 {base_offset_x:.1f}, 상하 {base_offset_y:.1f}")
                         
-                        col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
+                        col1, col2, col3 = st.columns(3)
                         
                         with col1:
                             individual_settings[page_num]['scale_adjust'] = st.number_input(
                                 "축소 조정", 
-                                min_value=-0.50, max_value=0.50, 
+                                min_value=-0.50, 
+                                max_value=0.50, 
                                 value=individual_settings[page_num]['scale_adjust'], 
-                                step=0.01, 
+                                step=0.01,
+                                format="%.2f",
                                 key=f"individual_scale_{page_num}",
                                 help=f"최종값: {base_scale + individual_settings[page_num]['scale_adjust']:.2f}"
                             )
@@ -923,9 +936,11 @@ def main():
                         with col2:
                             individual_settings[page_num]['offset_x_adjust'] = st.number_input(
                                 "좌우 조정", 
-                                min_value=-20.0, max_value=20.0, 
+                                min_value=-20.0, 
+                                max_value=20.0, 
                                 value=individual_settings[page_num]['offset_x_adjust'], 
-                                step=0.1, 
+                                step=0.1,
+                                format="%.1f",
                                 key=f"individual_offset_x_{page_num}",
                                 help=f"최종값: {base_offset_x + individual_settings[page_num]['offset_x_adjust']:.1f}"
                             )
@@ -933,16 +948,14 @@ def main():
                         with col3:
                             individual_settings[page_num]['offset_y_adjust'] = st.number_input(
                                 "상하 조정", 
-                                min_value=-20.0, max_value=20.0, 
+                                min_value=-20.0, 
+                                max_value=20.0, 
                                 value=individual_settings[page_num]['offset_y_adjust'], 
-                                step=0.1, 
+                                step=0.1,
+                                format="%.1f",
                                 key=f"individual_offset_y_{page_num}",
                                 help=f"최종값: {base_offset_y + individual_settings[page_num]['offset_y_adjust']:.1f}"
                             )
-                        
-                        with col4:
-                            if st.button("제거", key=f"remove_page_{page_num}"):
-                                pages_to_remove.append(page_num)
                     
                     # 제거된 페이지들 처리
                     for page_num in pages_to_remove:
@@ -954,7 +967,7 @@ def main():
                 else:
                     individual_settings = {}
             else:
-                st.warning("⚠️ PDF를 먼저 업로드하고 분할해주세요.")
+                st.info("💡 PDF 분할 완료 후 개별 페이지 미세조정을 사용할 수 있습니다.")
                 individual_settings = {}
         
         st.divider()
