@@ -29,6 +29,8 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.lib.colors import red, blue
+import fitz  # PyMuPDF for preview images
+from PIL import Image, ImageDraw, ImageFont
 import io
 import os
 import tempfile
@@ -198,65 +200,95 @@ class BookPublishingEditor:
         return output_buffer.getvalue()
     
     def transform_page_to_book_size(self, page, margins, scale_factor, offset_x, offset_y):
-        """페이지를 책 크기로 변환 (PyPDF2 3.0.1 호환)"""
-        # 여백을 포인트로 변환
-        margin_left_pt = margins['left'] * mm
-        margin_right_pt = margins['right'] * mm
-        margin_top_pt = margins['top'] * mm
-        margin_bottom_pt = margins['bottom'] * mm
-        
-        # 콘텐츠 영역 계산
-        content_width = self.book_width_pt - margin_left_pt - margin_right_pt
-        content_height = self.book_height_pt - margin_top_pt - margin_bottom_pt
-        
-        # 원본 페이지 크기
-        original_width = float(page.mediabox.width)
-        original_height = float(page.mediabox.height)
-        
-        # 안전장치
-        if original_width <= 0 or original_height <= 0 or content_width <= 0 or content_height <= 0:
-            # 기본 변환만 적용
+        """페이지를 책 크기로 변환 - ReportLab 방식 사용"""
+        try:
+            # 원본 페이지를 이미지로 렌더링
+            temp_buffer = io.BytesIO()
+            temp_writer = PdfWriter()
+            temp_writer.add_page(page)
+            temp_writer.write(temp_buffer)
+            temp_buffer.seek(0)
+            
+            # PyMuPDF로 고해상도 이미지 생성
+            doc = fitz.open(stream=temp_buffer.getvalue(), filetype="pdf")
+            pdf_page = doc[0]
+            
+            # 고해상도 렌더링 (300 DPI)
+            mat = fitz.Matrix(4.17, 4.17)  # 300 DPI
+            pix = pdf_page.get_pixmap(matrix=mat)
+            img_data = pix.tobytes("png")
+            
+            doc.close()
+            temp_buffer.close()
+            
+            # ReportLab으로 새 페이지 생성
+            output_buffer = io.BytesIO()
+            c = canvas.Canvas(output_buffer, pagesize=(self.book_width_pt, self.book_height_pt))
+            
+            # 여백을 포인트로 변환
+            margin_left_pt = margins['left'] * mm
+            margin_right_pt = margins['right'] * mm
+            margin_top_pt = margins['top'] * mm
+            margin_bottom_pt = margins['bottom'] * mm
+            
+            # 콘텐츠 영역 계산
+            content_width = self.book_width_pt - margin_left_pt - margin_right_pt
+            content_height = self.book_height_pt - margin_top_pt - margin_bottom_pt
+            
+            # 이미지를 임시 파일로 저장
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_img_file:
+                temp_img_file.write(img_data)
+                temp_img_path = temp_img_file.name
+            
+            try:
+                # PIL로 이미지 크기 확인
+                with Image.open(temp_img_path) as img:
+                    img_width, img_height = img.size
+                
+                # 스케일 계산
+                scale_x = (content_width * scale_factor) / img_width * 72 / 300  # DPI 보정
+                scale_y = (content_height * scale_factor) / img_height * 72 / 300
+                scale = min(scale_x, scale_y)
+                
+                # 최종 이미지 크기
+                final_width = img_width * scale
+                final_height = img_height * scale
+                
+                # 중앙 정렬 위치 계산
+                center_x = margin_left_pt + (content_width - final_width) / 2
+                center_y = margin_bottom_pt + (content_height - final_height) / 2
+                
+                # 사용자 오프셋 적용
+                final_x = center_x + (offset_x * mm)
+                final_y = center_y + (offset_y * mm)
+                
+                # 이미지 그리기
+                c.drawImage(temp_img_path, final_x, final_y, 
+                           width=final_width, height=final_height)
+                
+            finally:
+                # 임시 파일 삭제
+                try:
+                    os.unlink(temp_img_path)
+                except:
+                    pass
+            
+            c.save()
+            output_buffer.seek(0)
+            
+            # 새 페이지 객체 생성
+            new_reader = PdfReader(output_buffer)
+            new_page = new_reader.pages[0]
+            
+            output_buffer.close()
+            
+            return new_page
+            
+        except Exception as e:
+            print(f"페이지 변환 실패: {e}")
+            # 실패 시 원본 페이지 크기만 조정
             page.mediabox = RectangleObject([0, 0, self.book_width_pt, self.book_height_pt])
             return page
-        
-        # 스케일 계산 (비율 유지)
-        scale_x = (content_width * scale_factor) / original_width
-        scale_y = (content_height * scale_factor) / original_height
-        scale = min(scale_x, scale_y)
-        
-        # 중앙 정렬을 위한 오프셋 계산
-        scaled_width = original_width * scale
-        scaled_height = original_height * scale
-        
-        center_x = margin_left_pt + (content_width - scaled_width) / 2
-        center_y = margin_bottom_pt + (content_height - scaled_height) / 2
-        
-        # 사용자 오프셋 추가 (mm를 포인트로 변환)
-        final_x = center_x + (offset_x * mm)
-        final_y = center_y + (offset_y * mm)
-        
-        # PyPDF2 3.0.1 호환 - 기본 스케일링만 적용
-        try:
-            # 스케일링 적용 (PyPDF2 3.0.1 방식)
-            if hasattr(page, 'scale'):
-                page.scale(scale, scale)
-            elif hasattr(page, 'scaleBy'):
-                page.scaleBy(scale)
-            
-            # 이동 적용
-            if hasattr(page, 'translate'):
-                page.translate(final_x / scale, final_y / scale)
-            elif hasattr(page, 'translateBy'):
-                page.translateBy(final_x / scale, final_y / scale)
-                
-        except Exception as e:
-            # 변환 실패 시에도 계속 진행
-            print(f"페이지 변환 경고: {e}")
-        
-        # 새 페이지 크기 설정
-        page.mediabox = RectangleObject([0, 0, self.book_width_pt, self.book_height_pt])
-        
-        return page
     
     def add_margin_guides_to_page(self, page, margins, page_number):
         """페이지에 여백 가이드 선 추가"""
@@ -293,6 +325,91 @@ class BookPublishingEditor:
         overlay_page = overlay_reader.pages[0]
         page.merge_page(overlay_page)
         
+        return page
+
+    def create_preview_image(self, page_data, margins, scale_factor, offset_x, offset_y, page_number, show_page_numbers=True):
+        """미리보기 이미지 생성"""
+        try:
+            # 임시 PDF 파일로 페이지 저장
+            temp_buffer = io.BytesIO()
+            temp_writer = PdfWriter()
+            
+            # 페이지 복사 및 변환
+            page_copy = copy.deepcopy(page_data['page'])
+            
+            # 여백 계산
+            effective_margins = self.calculate_page_margins(
+                page_number, margins['top'], margins['bottom'], 
+                margins['outer'], margins['inner']
+            )
+            
+            # 페이지 변환 적용 (간단한 방식)
+            self.simple_transform_page(page_copy, effective_margins, scale_factor, offset_x, offset_y)
+            
+            temp_writer.add_page(page_copy)
+            temp_writer.write(temp_buffer)
+            temp_buffer.seek(0)
+            
+            # PyMuPDF로 이미지 렌더링
+            doc = fitz.open(stream=temp_buffer.getvalue(), filetype="pdf")
+            page = doc[0]
+            
+            # 낮은 해상도로 빠른 미리보기 생성
+            mat = fitz.Matrix(1.0, 1.0)  # 72 DPI
+            pix = page.get_pixmap(matrix=mat)
+            img_data = pix.tobytes("png")
+            
+            # PIL Image로 변환
+            img = Image.open(io.BytesIO(img_data))
+            
+            # 여백 가이드 선 추가
+            draw = ImageDraw.Draw(img)
+            
+            # 이미지 크기에 맞게 여백 계산
+            img_width, img_height = img.size
+            scale_x = img_width / self.book_width_pt
+            scale_y = img_height / self.book_height_pt
+            
+            margin_left_px = int(effective_margins['left'] * mm * scale_x)
+            margin_right_px = int(effective_margins['right'] * mm * scale_x)
+            margin_top_px = int(effective_margins['top'] * mm * scale_y)
+            margin_bottom_px = int(effective_margins['bottom'] * mm * scale_y)
+            
+            # 가이드 선 색상
+            line_color = (255, 0, 0) if page_number % 2 == 1 else (0, 0, 255)
+            
+            # 여백 가이드 선 그리기
+            draw.rectangle([
+                margin_left_px, margin_top_px,
+                img_width - margin_right_px, img_height - margin_bottom_px
+            ], outline=line_color, width=2)
+            
+            # 페이지 번호 표시
+            if show_page_numbers:
+                try:
+                    font = ImageFont.load_default()
+                    text = str(page_data.get('original_number', page_number))
+                    draw.text((10, 10), text, fill=(0, 0, 0), font=font)
+                except:
+                    pass
+            
+            doc.close()
+            temp_buffer.close()
+            
+            return img
+            
+        except Exception as e:
+            st.error(f"미리보기 생성 실패: {e}")
+            # 기본 이미지 반환
+            img = Image.new('RGB', (200, 280), color='white')
+            draw = ImageDraw.Draw(img)
+            draw.text((10, 10), f"Page {page_number}", fill=(0, 0, 0))
+            return img
+    
+    def simple_transform_page(self, page, margins, scale_factor, offset_x, offset_y):
+        """간단한 페이지 변환 (미리보기용)"""
+        # 새 페이지 크기만 설정
+        page.mediabox = RectangleObject([0, 0, self.book_width_pt, self.book_height_pt])
         return page
 
 def main():
@@ -424,23 +541,80 @@ def main():
         
         st.success(f"✅ 총 {len(ordered_pages)}개 페이지 준비 완료")
         
-        # 미리보기 (첫 4페이지)
-        st.subheader("👀 미리보기 (처음 4페이지)")
+        # 미리보기
+        st.subheader("👀 미리보기")
+        
+        # 미리보기 설정
+        col1, col2 = st.columns(2)
+        with col1:
+            show_page_numbers = st.checkbox("원본 페이지 번호 표시", value=True)
+        with col2:
+            # 페이지네이션을 위한 세션 상태 초기화
+            if 'preview_start' not in st.session_state:
+                st.session_state.preview_start = 0
         
         if len(ordered_pages) > 0:
-            preview_pages = ordered_pages[:4]
+            # 현재 페이지 범위 계산
+            start_idx = st.session_state.preview_start
+            end_idx = min(start_idx + 4, len(ordered_pages))
+            preview_pages = ordered_pages[start_idx:end_idx]
+            
+            # 페이지네이션 버튼
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col1:
+                if st.button("◀ 이전", disabled=(start_idx == 0)):
+                    st.session_state.preview_start = max(0, start_idx - 4)
+                    st.rerun()
+            
+            with col2:
+                st.write(f"페이지 {start_idx + 1}-{end_idx} / {len(ordered_pages)}")
+            
+            with col3:
+                if st.button("다음 ▶", disabled=(end_idx >= len(ordered_pages))):
+                    st.session_state.preview_start = min(len(ordered_pages) - 4, start_idx + 4)
+                    st.rerun()
+            
+            # 미리보기 이미지 생성 및 표시
             cols = st.columns(min(4, len(preview_pages)))
             
-            for i, page_info in enumerate(preview_pages):
-                with cols[i]:
-                    st.write(f"**페이지 {i+1}**")
-                    st.write(f"*{page_info['description']}*")
-                    
-                    # 간단한 페이지 정보 표시
-                    if (i+1) % 2 == 1:
-                        st.write("🔴 홀수 페이지")
-                    else:
-                        st.write("🔵 짝수 페이지")
+            with st.spinner("미리보기 생성 중..."):
+                for i, page_data in enumerate(preview_pages):
+                    with cols[i]:
+                        page_num = start_idx + i + 1
+                        st.write(f"**페이지 {page_num}**")
+                        st.write(f"*{page_data['description']}*")
+                        
+                        # 현재 페이지의 설정 가져오기
+                        if page_num % 2 == 1:  # 홀수 페이지
+                            current_scale = scale_odd
+                            current_offset_x = offset_x_odd
+                            current_offset_y = offset_y_odd
+                            st.write("🔴 홀수 페이지")
+                        else:  # 짝수 페이지
+                            current_scale = scale_even
+                            current_offset_x = offset_x_even
+                            current_offset_y = offset_y_even
+                            st.write("🔵 짝수 페이지")
+                        
+                        # 여백 설정
+                        margins = {
+                            'top': margin_top,
+                            'bottom': margin_bottom,
+                            'outer': margin_outer,
+                            'inner': margin_inner
+                        }
+                        
+                        # 미리보기 이미지 생성
+                        try:
+                            preview_img = editor.create_preview_image(
+                                page_data, margins, current_scale, 
+                                current_offset_x, current_offset_y, 
+                                page_num, show_page_numbers
+                            )
+                            st.image(preview_img, use_column_width=True)
+                        except Exception as e:
+                            st.error(f"미리보기 생성 실패: {e}")
+                            st.write("미리보기를 생성할 수 없습니다.")
         
         # PDF 생성 버튼
         st.divider()
