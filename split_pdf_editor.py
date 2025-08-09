@@ -28,18 +28,24 @@ class SplitPDFEditor:
         """포인트를 밀리미터로 변환"""
         return points_value / 2.83465
     
-    def calculate_print_size(self, cut_margin=2):
-        """제단 여백을 고려한 인쇄 크기 계산"""
-        # 양면 복사 후 반으로 자르므로 A4 크기에서 2페이지가 나옴
-        # A4 = 210 x 297mm
-        # 반으로 자르면 105 x 297mm (가로 방향)
-        # 최종 크기: 125 x 175mm
+    def calculate_margins_for_page(self, page_number, margin_top, margin_bottom, margin_outer, margin_inner):
+        """페이지 번호에 따라 실제 여백 계산 (홀수/짝수 페이지 고려)"""
+        # 홀수 페이지(1,3,5...): 왼쪽이 안쪽, 오른쪽이 바깥쪽
+        # 짝수 페이지(2,4,6...): 왼쪽이 바깥쪽, 오른쪽이 안쪽
         
-        # 제단 여백을 고려한 실제 인쇄 크기
-        print_width = (self.book_width + self.convert_mm_to_points(cut_margin * 2))
-        print_height = (self.book_height + self.convert_mm_to_points(cut_margin * 2))
+        if page_number % 2 == 1:  # 홀수 페이지
+            margin_left = margin_inner   # 안쪽
+            margin_right = margin_outer  # 바깥쪽
+        else:  # 짝수 페이지
+            margin_left = margin_outer   # 바깥쪽
+            margin_right = margin_inner  # 안쪽
         
-        return print_width, print_height
+        return {
+            'top': margin_top,
+            'bottom': margin_bottom,
+            'left': margin_left,
+            'right': margin_right
+        }
     
     def analyze_pdf_content(self, pdf_path):
         """PDF 내용 분석"""
@@ -96,8 +102,9 @@ class SplitPDFEditor:
             return top_page, bottom_page
     
     def generate_preview_images(self, content_pdf_path, split_direction='vertical', 
-                              max_pages=4, use_first_page=True, page_order="1234"):
-        """미리보기용 이미지 생성"""
+                              max_pages=4, use_first_page=True, page_order="1234",
+                              margin_top=15, margin_bottom=15, margin_outer=15, margin_inner=15):
+        """미리보기용 이미지 생성 (여백 정보 포함)"""
         doc = fitz.open(content_pdf_path)
         all_pages = []
         
@@ -164,42 +171,33 @@ class SplitPDFEditor:
         else:
             reordered_pages = all_pages
         
-        # 최종 미리보기 이미지 생성
+        # 최종 미리보기 이미지 생성 (여백 정보 포함)
         preview_images = []
         for i, page_info in enumerate(reordered_pages[:max_pages]):
+            page_number = i + 1
+            margins = self.calculate_margins_for_page(page_number, margin_top, margin_bottom, margin_outer, margin_inner)
+            
             preview_images.append({
-                'page_number': i + 1,
+                'page_number': page_number,
                 'image_data': page_info['image_data'],
-                'description': f"페이지 {i + 1} ({page_info['description']})"
+                'description': f"페이지 {page_number} ({page_info['description']})",
+                'margins': margins,
+                'margin_info': f"위{margins['top']}mm, 아래{margins['bottom']}mm, 왼쪽{margins['left']}mm, 오른쪽{margins['right']}mm"
             })
         
         return preview_images
     
     def create_book_pages(self, content_pdf_path, margin_top=15, margin_bottom=15, 
-                         margin_left=15, margin_right=15, split_direction='vertical',
-                         use_first_page=True, page_order="1234", cut_margin=2):
+                         margin_outer=15, margin_inner=15, split_direction='vertical',
+                         use_first_page=True, page_order="1234"):
         """PDF 내용을 책 페이지 크기로 변환"""
-        
-        # 제단 여백을 고려한 인쇄 크기 계산
-        print_width, print_height = self.calculate_print_size(cut_margin)
-        
-        # 여백을 포인트로 변환
-        margin_top_pt = self.convert_mm_to_points(margin_top)
-        margin_bottom_pt = self.convert_mm_to_points(margin_bottom)
-        margin_left_pt = self.convert_mm_to_points(margin_left)
-        margin_right_pt = self.convert_mm_to_points(margin_right)
-        cut_margin_pt = self.convert_mm_to_points(cut_margin)
-        
-        # 사용 가능한 내용 영역 계산 (제단 여백 고려)
-        content_width = print_width - margin_left_pt - margin_right_pt - (cut_margin_pt * 2)
-        content_height = print_height - margin_top_pt - margin_bottom_pt - (cut_margin_pt * 2)
         
         # 원본 PDF 읽기
         doc = fitz.open(content_pdf_path)
         
-        # 새 PDF 생성 (제단 여백 포함 크기)
+        # 새 PDF 생성
         output = io.BytesIO()
-        c = canvas.Canvas(output, pagesize=(print_width, print_height))
+        c = canvas.Canvas(output, pagesize=(self.book_width, self.book_height))
         
         all_pages = []
         
@@ -259,14 +257,26 @@ class SplitPDFEditor:
         
         total_pages = 0
         
-        # 재배열된 페이지들을 PDF에 추가
-        for img_path in reordered_pages:
+        # 재배열된 페이지들을 PDF에 추가 (각 페이지별 여백 적용)
+        for i, img_path in enumerate(reordered_pages):
             if os.path.exists(img_path):
-                # 제단 여백을 고려한 위치에 이미지 배치
-                self.add_page_to_book_with_cut_margin(
+                page_number = i + 1
+                margins = self.calculate_margins_for_page(page_number, margin_top, margin_bottom, margin_outer, margin_inner)
+                
+                # 여백을 포인트로 변환
+                margin_top_pt = self.convert_mm_to_points(margins['top'])
+                margin_bottom_pt = self.convert_mm_to_points(margins['bottom'])
+                margin_left_pt = self.convert_mm_to_points(margins['left'])
+                margin_right_pt = self.convert_mm_to_points(margins['right'])
+                
+                # 사용 가능한 내용 영역 계산
+                content_width = self.book_width - margin_left_pt - margin_right_pt
+                content_height = self.book_height - margin_top_pt - margin_bottom_pt
+                
+                # 이미지를 페이지에 추가
+                self.add_page_to_book(
                     c, img_path, content_width, content_height, 
-                    margin_left_pt + cut_margin_pt, 
-                    margin_bottom_pt + cut_margin_pt
+                    margin_left_pt, margin_bottom_pt
                 )
                 total_pages += 1
                 os.unlink(img_path)  # 임시 파일 삭제
@@ -290,33 +300,9 @@ class SplitPDFEditor:
             img_file.write(img_data)
             return img_file.name
     
-    def add_page_to_book_with_cut_margin(self, canvas_obj, image_path, content_width, content_height, 
-                                       margin_left_pt, margin_bottom_pt):
-        """제단 여백을 고려하여 이미지를 책 페이지에 추가"""
-        # 이미지 크기 조정
-        adjusted_img_path = self.adjust_image_for_book(
-            image_path, content_width, content_height, 'fit_both'
-        )
-        
-        # 제단 가이드 라인 그리기 (옵션)
-        # canvas_obj.setStrokeColor(black)
-        # canvas_obj.setLineWidth(0.5)
-        # canvas_obj.rect(margin_left_pt - cut_margin_pt, margin_bottom_pt - cut_margin_pt, 
-        #                content_width + cut_margin_pt * 2, content_height + cut_margin_pt * 2)
-        
-        # 조정된 이미지를 새 페이지에 그리기
-        canvas_obj.drawImage(adjusted_img_path, margin_left_pt, margin_bottom_pt, 
-                           width=content_width, height=content_height)
-        
-        canvas_obj.showPage()
-        
-        # 임시 파일 정리
-        if adjusted_img_path != image_path:
-            os.unlink(adjusted_img_path)
-    
     def add_page_to_book(self, canvas_obj, image_path, content_width, content_height, 
                         margin_left_pt, margin_bottom_pt):
-        """이미지를 책 페이지에 추가 (기존 메서드)"""
+        """이미지를 책 페이지에 추가"""
         # 이미지 크기 조정
         adjusted_img_path = self.adjust_image_for_book(
             image_path, content_width, content_height, 'fit_both'
@@ -380,28 +366,16 @@ class SplitPDFEditor:
 
 def main():
     st.set_page_config(
-        page_title="PDF 분할 편집기 (제단용)",
+        page_title="PDF 분할 편집기",
         page_icon="📚",
         layout="wide"
     )
     
-    st.title("📚 PDF 분할 편집기 (제단용)")
-    st.markdown("가로 PDF를 분할하여 125×175mm 책 페이지로 변환 (양면 복사 및 제단 고려)")
+    st.title("📚 PDF 분할 편집기")
+    st.markdown("가로 PDF를 분할하여 125×175mm 책 페이지로 변환")
     
     # 사이드바 설정
-    st.sidebar.header("📐 편집 설정")
-    
-    # 여백 설정
-    st.sidebar.subheader("여백 설정 (mm)")
-    margin_top = st.sidebar.slider("상단 여백", 5, 40, 15)
-    margin_bottom = st.sidebar.slider("하단 여백", 5, 40, 15)
-    margin_left = st.sidebar.slider("좌측 여백", 5, 40, 15)
-    margin_right = st.sidebar.slider("우측 여백", 5, 40, 15)
-    
-    # 제단 여백 설정
-    st.sidebar.subheader("제단 여백 설정 (mm)")
-    cut_margin = st.sidebar.slider("제단 여백", 1, 5, 2, 
-                                  help="양면 복사 후 제단할 때 필요한 여백")
+    st.sidebar.header("📐 기본 설정")
     
     # 분할 방향 설정
     st.sidebar.subheader("분할 설정")
@@ -415,7 +389,7 @@ def main():
     )
     
     # 페이지 순서 설정
-    st.sidebar.subheader("페이지 순서 설정")
+    st.sidebar.subheader("페이지 설정")
     use_first_page = st.sidebar.checkbox("첫 페이지 사용", value=True,
                                         help="분할된 첫 페이지를 사용할지 선택")
     
@@ -452,7 +426,6 @@ def main():
         
         with col2:
             st.write(f"**최종 크기:** 125×175mm")
-            st.write(f"**제단 여백:** {cut_margin}mm")
             st.write(f"**첫 페이지:** {'사용' if use_first_page else '사용 안함'}")
             st.write(f"**페이지 순서:** {page_order}")
         
@@ -502,22 +475,31 @@ def main():
             
             st.info(f"📋 **최종 페이지 수:** {final_pages}페이지 ({page_order} 순서)")
             
-            # 제단 정보 표시
-            st.subheader("✂️ 제단 정보")
-            col1, col2 = st.columns(2)
+            # 여백 설정 (미리보기 이후에 배치)
+            st.subheader("📏 여백 설정")
+            st.markdown("**책 제본을 위한 여백 설정**")
+            
+            col1, col2, col3, col4 = st.columns(4)
             
             with col1:
-                st.write("**인쇄 과정:**")
-                st.write("1. 양면 복사로 인쇄")
-                st.write("2. 종이를 반으로 자르기")
-                st.write("3. 125×175mm로 제단")
-                
+                margin_top = st.slider("위 (상단 여백)", 5, 40, 15, help="모든 페이지의 상단 여백")
+            
             with col2:
-                print_width, print_height = editor.calculate_print_size(cut_margin)
-                st.write("**실제 인쇄 크기:**")
-                st.write(f"- 너비: {editor.convert_points_to_mm(print_width):.1f}mm")
-                st.write(f"- 높이: {editor.convert_points_to_mm(print_height):.1f}mm")
-                st.write(f"- 제단 여백: {cut_margin}mm")
+                margin_bottom = st.slider("아래 (하단 여백)", 5, 40, 15, help="모든 페이지의 하단 여백")
+            
+            with col3:
+                margin_outer = st.slider("바깥쪽", 5, 40, 20, help="홀수 페이지 오른쪽, 짝수 페이지 왼쪽 여백")
+            
+            with col4:
+                margin_inner = st.slider("안쪽", 5, 40, 15, help="홀수 페이지 왼쪽, 짝수 페이지 오른쪽 여백")
+            
+            # 여백 설명
+            st.markdown("""
+            **여백 설명:**
+            - **위/아래**: 모든 페이지의 상단/하단 여백
+            - **바깥쪽**: 홀수 페이지(1,3,5...)의 오른쪽, 짝수 페이지(2,4,6...)의 왼쪽 여백
+            - **안쪽**: 홀수 페이지(1,3,5...)의 왼쪽, 짝수 페이지(2,4,6...)의 오른쪽 여백 (제본 부분)
+            """)
             
             # 미리보기 표시
             if show_preview and analysis['is_landscape']:
@@ -530,7 +512,11 @@ def main():
                             split_direction=split_direction,
                             max_pages=preview_pages,
                             use_first_page=use_first_page,
-                            page_order=page_order
+                            page_order=page_order,
+                            margin_top=margin_top,
+                            margin_bottom=margin_bottom,
+                            margin_outer=margin_outer,
+                            margin_inner=margin_inner
                         )
                         
                         if preview_images:
@@ -540,9 +526,10 @@ def main():
                                 col_idx = i % 2
                                 with cols[col_idx]:
                                     st.write(f"**{img_info['description']}**")
+                                    st.write(f"*여백: {img_info['margin_info']}*")
                                     st.image(
                                         img_info['image_data'], 
-                                        caption=f"최종 페이지 {img_info['page_number']}",
+                                        caption=f"최종 페이지 {img_info['page_number']} ({'홀수' if img_info['page_number'] % 2 == 1 else '짝수'} 페이지)",
                                         use_column_width=True
                                     )
                         else:
@@ -552,36 +539,35 @@ def main():
                         st.error(f"미리보기 생성 중 오류: {str(e)}")
             
             # 편집 버튼
-            if st.button("📖 PDF 분할하기 (제단용)", type="primary"):
-                with st.spinner("제단용 PDF를 생성하는 중..."):
+            if st.button("📖 PDF 생성하기", type="primary"):
+                with st.spinner("PDF를 생성하는 중..."):
                     try:
                         result_pdf, actual_pages = editor.create_book_pages(
                             tmp_file_path,
                             margin_top=margin_top,
                             margin_bottom=margin_bottom,
-                            margin_left=margin_left,
-                            margin_right=margin_right,
+                            margin_outer=margin_outer,
+                            margin_inner=margin_inner,
                             split_direction=split_direction,
                             use_first_page=use_first_page,
-                            page_order=page_order,
-                            cut_margin=cut_margin
+                            page_order=page_order
                         )
                         
                         # 결과 다운로드
-                        st.success(f"✅ 제단용 PDF 생성 완료! (총 {actual_pages}페이지)")
+                        st.success(f"✅ PDF 생성 완료! (총 {actual_pages}페이지)")
                         
                         # 다운로드 버튼
                         col1, col2 = st.columns(2)
                         with col1:
                             st.download_button(
-                                label="📥 제단용 PDF 다운로드",
+                                label="📥 완성된 PDF 다운로드",
                                 data=result_pdf.getvalue(),
-                                file_name=f"cut_ready_{uploaded_file.name}",
+                                file_name=f"book_{uploaded_file.name}",
                                 mime="application/pdf"
                             )
                         
                         with col2:
-                            st.info(f"💡 **팁:** 양면 복사 후 반으로 자르고 {cut_margin}mm 여백을 두고 제단하세요.")
+                            st.info("💡 **팁:** 홀수/짝수 페이지별로 여백이 적용되었습니다.")
                         
                     except Exception as e:
                         st.error(f"❌ 생성 중 오류가 발생했습니다: {str(e)}")
@@ -596,25 +582,31 @@ def main():
     # 사용법 안내
     with st.expander("📖 상세 사용법"):
         st.markdown("""
-        ### 🎯 사용 방법
+        ### 🎯 사용 프로세스
         
         1. **PDF 파일 업로드**: 편집할 PDF 파일을 선택합니다.
-        2. **여백 설정**: 사이드바에서 상단, 하단, 좌측, 우측 여백을 조정합니다.
-        3. **제단 여백 설정**: 양면 복사 후 제단할 때 필요한 여백을 설정합니다.
-        4. **분할 방향 선택**: 세로 분할(좌우) 또는 가로 분할(상하)을 선택합니다.
-        5. **페이지 설정**: 
-           - 첫 페이지 사용 여부 선택
-           - 페이지 순서 선택 (1,2,3,4 또는 2,3,4,1)
-        6. **미리보기 확인**: 최종 결과를 미리 확인합니다.
-        7. **PDF 생성**: '제단용 PDF 생성' 버튼을 클릭합니다.
-        8. **다운로드**: 제단용 PDF를 다운로드합니다.
+        2. **기본 설정**: 분할 방향과 페이지 설정을 조정합니다.
+        3. **미리보기 확인**: 분할된 페이지들을 미리 확인합니다.
+        4. **여백 설정**: 책 제본에 맞는 여백을 설정합니다.
+        5. **PDF 생성**: 'PDF 생성하기' 버튼을 클릭합니다.
+        6. **다운로드**: 완성된 PDF를 다운로드합니다.
         
-        ### ✂️ 제단 과정
+        ### 📏 여백 설정 가이드
         
-        1. **양면 복사**: 생성된 PDF를 양면으로 인쇄합니다.
-        2. **반으로 자르기**: 인쇄된 종이를 가로로 반을 잘라 2장을 만듭니다.
-        3. **제단**: 각 장을 125×175mm 크기로 제단합니다.
-        4. **완성**: 최종 책 페이지가 완성됩니다.
+        #### 여백의 의미
+        - **위**: 모든 페이지의 상단 여백
+        - **아래**: 모든 페이지의 하단 여백
+        - **바깥쪽**: 페이지의 바깥쪽 여백 (홀수 페이지 오른쪽, 짝수 페이지 왼쪽)
+        - **안쪽**: 페이지의 안쪽 여백 (홀수 페이지 왼쪽, 짝수 페이지 오른쪽) - 제본 부분
+        
+        #### 권장 여백 설정
+        
+        | 책 유형 | 위 | 아래 | 바깥쪽 | 안쪽 |
+        |---------|----|----|--------|------|
+        | 일반 소설 | 20mm | 15mm | 20mm | 15mm |
+        | 참고서 | 15mm | 15mm | 20mm | 20mm |
+        | 만화책 | 10mm | 10mm | 15mm | 12mm |
+        | 잡지 | 12mm | 12mm | 18mm | 15mm |
         
         ### 📋 페이지 순서 설명
         
@@ -625,24 +617,14 @@ def main():
         ### 🔍 미리보기 기능
         
         - **실시간 미리보기**: 설정 변경 시 자동으로 미리보기 업데이트
-        - **페이지 순서 반영**: 선택한 페이지 순서가 미리보기에 반영
-        - **제단 여백 고려**: 실제 제단 결과를 예상할 수 있음
-        
-        ### 📏 권장 설정
-        
-        | 용도 | 여백 | 제단여백 | 순서 |
-        |------|------|----------|------|
-        | 일반 책 | 15mm | 2mm | 1234 |
-        | 소설책 | 20mm | 2mm | 1234 |
-        | 만화책 | 10mm | 1mm | 1234 |
-        | 참고서 | 15mm | 3mm | 1234 |
+        - **여백 정보**: 각 페이지별 여백 정보 표시
+        - **홀수/짝수 구분**: 페이지 번호에 따른 여백 적용 확인
         
         ### ⚠️ 주의사항
         
-        - **제단 여백**: 너무 작으면 내용이 잘릴 수 있습니다.
-        - **인쇄 품질**: 고품질 인쇄를 권장합니다.
-        - **종이 선택**: 적절한 두께의 종이를 사용하세요.
-        - **제단 정확도**: 정확한 제단을 위해 전문 업체 이용을 권장합니다.
+        - **안쪽 여백**: 제본을 위해 충분한 안쪽 여백을 확보하세요.
+        - **바깥쪽 여백**: 독서 시 손가락이 닿는 부분이므로 적절한 여백을 두세요.
+        - **페이지 순서**: 미리보기에서 페이지 순서를 확인한 후 생성하세요.
         """)
 
 if __name__ == "__main__":
