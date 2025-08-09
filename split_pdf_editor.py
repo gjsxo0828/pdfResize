@@ -205,8 +205,24 @@ class BookPublishingEditor:
                     margins['outer'], margins['inner']
                 )
                 
-                # 페이지별 스케일링 설정 선택
-                if page_number % 2 == 1:  # 홀수 페이지
+                # 페이지별 스케일링 설정 선택 (기본값 + 개별 조정)
+                if page_number in scaling_settings.get('individual_adjustments', {}):
+                    # 개별 조정이 있는 경우: 기본값 + 조정값
+                    if page_number % 2 == 1:  # 홀수 페이지 기본값
+                        base_scale = scaling_settings['odd']['scale']
+                        base_offset_x = scaling_settings['odd']['offset_x']
+                        base_offset_y = scaling_settings['odd']['offset_y']
+                    else:  # 짝수 페이지 기본값
+                        base_scale = scaling_settings['even']['scale']
+                        base_offset_x = scaling_settings['even']['offset_x']
+                        base_offset_y = scaling_settings['even']['offset_y']
+                    
+                    # 조정값 적용
+                    adjust = scaling_settings['individual_adjustments'][page_number]
+                    scale_factor = base_scale + adjust['scale_adjust']
+                    offset_x = base_offset_x + adjust['offset_x_adjust']
+                    offset_y = base_offset_y + adjust['offset_y_adjust']
+                elif page_number % 2 == 1:  # 홀수 페이지
                     scale_factor = scaling_settings['odd']['scale']
                     offset_x = scaling_settings['odd']['offset_x']
                     offset_y = scaling_settings['odd']['offset_y']
@@ -817,25 +833,129 @@ def main():
         # 스케일링 및 위치 조정
         with st.expander("🔧 크기 및 위치 조정", expanded=False):
             
-            # 홀수 페이지 설정
-            st.write("**홀수 페이지 (1,3,5...)**")
-            col1, col2, col3 = st.columns(3)
+            # 기본 홀수/짝수 페이지 설정
+            st.write("**📋 기본 설정**")
+            
+            col1, col2 = st.columns(2)
             with col1:
+                st.write("🔴 홀수 페이지 (1,3,5...)")
                 scale_odd = st.number_input("축소 비율", min_value=0.10, max_value=2.00, value=1.00, step=0.01, key="scale_odd")
-            with col2:
                 offset_x_odd = st.number_input("좌우 이동", min_value=-50.0, max_value=50.0, value=0.0, step=0.1, key="offset_x_odd")
-            with col3:
                 offset_y_odd = st.number_input("상하 이동", min_value=-50.0, max_value=50.0, value=0.0, step=0.1, key="offset_y_odd")
             
-            # 짝수 페이지 설정
-            st.write("**짝수 페이지 (2,4,6...)**")
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                scale_even = st.number_input("축소 비율", min_value=0.10, max_value=2.00, value=1.00, step=0.01, key="scale_even")
             with col2:
+                st.write("🔵 짝수 페이지 (2,4,6...)")
+                scale_even = st.number_input("축소 비율", min_value=0.10, max_value=2.00, value=1.00, step=0.01, key="scale_even")
                 offset_x_even = st.number_input("좌우 이동", min_value=-50.0, max_value=50.0, value=0.0, step=0.1, key="offset_x_even")
-            with col3:
                 offset_y_even = st.number_input("상하 이동", min_value=-50.0, max_value=50.0, value=0.0, step=0.1, key="offset_y_even")
+            
+            st.divider()
+            
+            # 개별 페이지 미세조정
+            st.write("**🎯 개별 페이지 미세조정**")
+            st.info("💡 기본 설정에서 특정 페이지만 추가로 조정하고 싶을 때 사용하세요.")
+            
+            # 세션 상태에서 개별 설정 관리
+            if 'individual_settings' not in st.session_state:
+                st.session_state.individual_settings = {}
+            
+            # PDF가 분할된 경우에만 개별 조정 가능
+            if 'split_pages' in st.session_state and st.session_state.split_pages:
+                max_pages = len(st.session_state.split_pages)
+                
+                # 페이지 추가
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    page_to_add = st.selectbox("미세조정할 페이지 선택", range(1, max_pages + 1), key="page_selector")
+                with col2:
+                    if st.button("페이지 추가", key="add_page_btn"):
+                        if page_to_add not in st.session_state.individual_settings:
+                            # 기본값으로 초기화 (홀수/짝수에 따라)
+                            if page_to_add % 2 == 1:  # 홀수
+                                st.session_state.individual_settings[page_to_add] = {
+                                    'scale_adjust': 0.0,    # 기본값에서 조정할 값
+                                    'offset_x_adjust': 0.0, # 기본값에서 조정할 값  
+                                    'offset_y_adjust': 0.0  # 기본값에서 조정할 값
+                                }
+                            else:  # 짝수
+                                st.session_state.individual_settings[page_to_add] = {
+                                    'scale_adjust': 0.0,
+                                    'offset_x_adjust': 0.0,
+                                    'offset_y_adjust': 0.0
+                                }
+                            st.rerun()
+                
+                # 개별 설정된 페이지들 표시
+                individual_settings = st.session_state.individual_settings.copy()
+                
+                if individual_settings:
+                    st.write("**개별 조정된 페이지들:**")
+                    pages_to_remove = []
+                    
+                    for page_num in sorted(individual_settings.keys()):
+                        # 해당 페이지의 기본값 표시
+                        if page_num % 2 == 1:  # 홀수
+                            base_scale = scale_odd
+                            base_offset_x = offset_x_odd
+                            base_offset_y = offset_y_odd
+                            page_type = "🔴 홀수"
+                        else:  # 짝수
+                            base_scale = scale_even
+                            base_offset_x = offset_x_even
+                            base_offset_y = offset_y_even
+                            page_type = "🔵 짝수"
+                        
+                        st.write(f"📄 **페이지 {page_num}** ({page_type})")
+                        st.caption(f"기본값: 축소 {base_scale:.2f}, 좌우 {base_offset_x:.1f}, 상하 {base_offset_y:.1f}")
+                        
+                        col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
+                        
+                        with col1:
+                            individual_settings[page_num]['scale_adjust'] = st.number_input(
+                                "축소 조정", 
+                                min_value=-0.50, max_value=0.50, 
+                                value=individual_settings[page_num]['scale_adjust'], 
+                                step=0.01, 
+                                key=f"individual_scale_{page_num}",
+                                help=f"최종값: {base_scale + individual_settings[page_num]['scale_adjust']:.2f}"
+                            )
+                        
+                        with col2:
+                            individual_settings[page_num]['offset_x_adjust'] = st.number_input(
+                                "좌우 조정", 
+                                min_value=-20.0, max_value=20.0, 
+                                value=individual_settings[page_num]['offset_x_adjust'], 
+                                step=0.1, 
+                                key=f"individual_offset_x_{page_num}",
+                                help=f"최종값: {base_offset_x + individual_settings[page_num]['offset_x_adjust']:.1f}"
+                            )
+                        
+                        with col3:
+                            individual_settings[page_num]['offset_y_adjust'] = st.number_input(
+                                "상하 조정", 
+                                min_value=-20.0, max_value=20.0, 
+                                value=individual_settings[page_num]['offset_y_adjust'], 
+                                step=0.1, 
+                                key=f"individual_offset_y_{page_num}",
+                                help=f"최종값: {base_offset_y + individual_settings[page_num]['offset_y_adjust']:.1f}"
+                            )
+                        
+                        with col4:
+                            if st.button("제거", key=f"remove_page_{page_num}"):
+                                pages_to_remove.append(page_num)
+                    
+                    # 제거된 페이지들 처리
+                    for page_num in pages_to_remove:
+                        del st.session_state.individual_settings[page_num]
+                        st.rerun()
+                    
+                    # 세션 상태 업데이트
+                    st.session_state.individual_settings = individual_settings
+                else:
+                    individual_settings = {}
+            else:
+                st.warning("⚠️ PDF를 먼저 업로드하고 분할해주세요.")
+                individual_settings = {}
         
         st.divider()
         
@@ -871,6 +991,9 @@ def main():
         
         # 페이지 순서 적용
         ordered_pages = editor.apply_page_order(split_pages, page_order)
+        
+        # 세션 상태에 분할된 페이지 정보 저장 (개별 조정에서 사용)
+        st.session_state.split_pages = ordered_pages
         
         st.success(f"✅ 총 {len(ordered_pages)}개 페이지 준비 완료")
         
@@ -917,8 +1040,25 @@ def main():
                         st.write(f"**페이지 {page_num}**")
                         st.write(f"*{page_data['description']}*")
                         
-                        # 현재 페이지의 설정 가져오기
-                        if page_num % 2 == 1:  # 홀수 페이지
+                        # 현재 페이지의 설정 가져오기 (기본값 + 개별 조정)
+                        if 'individual_settings' in st.session_state and page_num in st.session_state.individual_settings:
+                            # 개별 조정이 있는 경우: 기본값 + 조정값
+                            if page_num % 2 == 1:  # 홀수 페이지 기본값
+                                base_scale = scale_odd
+                                base_offset_x = offset_x_odd
+                                base_offset_y = offset_y_odd
+                            else:  # 짝수 페이지 기본값
+                                base_scale = scale_even
+                                base_offset_x = offset_x_even
+                                base_offset_y = offset_y_even
+                            
+                            # 조정값 적용
+                            adjust = st.session_state.individual_settings[page_num]
+                            current_scale = base_scale + adjust['scale_adjust']
+                            current_offset_x = base_offset_x + adjust['offset_x_adjust']
+                            current_offset_y = base_offset_y + adjust['offset_y_adjust']
+                            st.write("⭐ 개별 조정 페이지")
+                        elif page_num % 2 == 1:  # 홀수 페이지
                             current_scale = scale_odd
                             current_offset_x = offset_x_odd
                             current_offset_y = offset_y_odd
@@ -971,7 +1111,8 @@ def main():
                     'scale': scale_even,
                     'offset_x': offset_x_even,
                     'offset_y': offset_y_even
-                }
+                },
+                'individual_adjustments': st.session_state.get('individual_settings', {})
             }
             
             # 프로그래스바와 상태 표시
