@@ -183,7 +183,7 @@ class SplitPDFEditor:
         return analysis
     
     def split_landscape_page(self, page, split_direction='vertical'):
-        """가로 페이지를 세로로 분할"""
+        """가로 페이지를 세로로 분할 (고해상도)"""
         rect = page.rect
         
         if split_direction == 'vertical':
@@ -191,8 +191,10 @@ class SplitPDFEditor:
             left_rect = fitz.Rect(0, 0, rect.width/2, rect.height)
             right_rect = fitz.Rect(rect.width/2, 0, rect.width, rect.height)
             
-            left_page = page.get_pixmap(clip=left_rect)
-            right_page = page.get_pixmap(clip=right_rect)
+            # 고해상도 렌더링 (300 DPI 수준)
+            high_res_matrix = fitz.Matrix(4.0, 4.0)  # 2.0에서 4.0으로 증가
+            left_page = page.get_pixmap(clip=left_rect, matrix=high_res_matrix)
+            right_page = page.get_pixmap(clip=right_rect, matrix=high_res_matrix)
             
             return left_page, right_page
         else:
@@ -200,8 +202,37 @@ class SplitPDFEditor:
             top_rect = fitz.Rect(0, 0, rect.width, rect.height/2)
             bottom_rect = fitz.Rect(0, rect.height/2, rect.width, rect.height)
             
-            top_page = page.get_pixmap(clip=top_rect)
-            bottom_page = page.get_pixmap(clip=bottom_rect)
+            # 고해상도 렌더링
+            high_res_matrix = fitz.Matrix(4.0, 4.0)
+            top_page = page.get_pixmap(clip=top_rect, matrix=high_res_matrix)
+            bottom_page = page.get_pixmap(clip=bottom_rect, matrix=high_res_matrix)
+            
+            return top_page, bottom_page
+    
+    def split_landscape_page_preview(self, page, split_direction='vertical'):
+        """가로 페이지를 세로로 분할 (미리보기용 - 빠른 로딩)"""
+        rect = page.rect
+        
+        if split_direction == 'vertical':
+            # 세로로 분할 (좌우 분할)
+            left_rect = fitz.Rect(0, 0, rect.width/2, rect.height)
+            right_rect = fitz.Rect(rect.width/2, 0, rect.width, rect.height)
+            
+            # 미리보기용 낮은 해상도 (75 DPI 수준 - 빠른 로딩)
+            preview_matrix = fitz.Matrix(1.0, 1.0)  # 미리보기용으로 대폭 낮춤
+            left_page = page.get_pixmap(clip=left_rect, matrix=preview_matrix)
+            right_page = page.get_pixmap(clip=right_rect, matrix=preview_matrix)
+            
+            return left_page, right_page
+        else:
+            # 가로로 분할 (상하 분할)
+            top_rect = fitz.Rect(0, 0, rect.width, rect.height/2)
+            bottom_rect = fitz.Rect(0, rect.height/2, rect.width, rect.height)
+            
+            # 미리보기용 낮은 해상도 (빠른 로딩)
+            preview_matrix = fitz.Matrix(1.0, 1.0)
+            top_page = page.get_pixmap(clip=top_rect, matrix=preview_matrix)
+            bottom_page = page.get_pixmap(clip=bottom_rect, matrix=preview_matrix)
             
             return top_page, bottom_page
     
@@ -209,20 +240,25 @@ class SplitPDFEditor:
                               max_pages=4, use_first_page=True, page_order="1234",
                               margin_top=15, margin_bottom=15, margin_outer=15, margin_inner=15,
                               scale_factor_odd=1.0, offset_x_odd=0, offset_y_odd=0,
-                              scale_factor_even=1.0, offset_x_even=0, offset_y_even=0):
+                              scale_factor_even=1.0, offset_x_even=0, offset_y_even=0,
+                              show_page_numbers=True, progress_callback=None):
         """미리보기용 이미지 생성 (홀수/짝수 페이지별 설정 포함)"""
         doc = fitz.open(content_pdf_path)
         all_pages = []
+        total_pages = len(doc)
         
-        # 모든 분할된 페이지 생성
-        for page_num in range(len(doc)):
+        # 모든 분할된 페이지 생성 (고정 번호 부여)
+        for page_num in range(total_pages):
+            if progress_callback:
+                progress_callback(page_num + 1, total_pages, f"페이지 {page_num + 1}/{total_pages} 분할 중...")
+            
             page = doc[page_num]
             rect = page.rect
             
             # 가로 페이지인지 확인
             if rect.width > rect.height:
-                # 가로 페이지를 분할
-                left_pix, right_pix = self.split_landscape_page(page, split_direction)
+                # 가로 페이지를 분할 (미리보기용 해상도)
+                left_pix, right_pix = self.split_landscape_page_preview(page, split_direction)
                 
                 # 좌측 페이지
                 left_img_data = left_pix.tobytes("png")
@@ -230,7 +266,8 @@ class SplitPDFEditor:
                     'image_data': left_img_data,
                     'description': f"원본 {page_num + 1}페이지 좌측",
                     'original_page': page_num,
-                    'split_part': 'left'
+                    'split_part': 'left',
+                    'fixed_number': len(all_pages) + 1  # 고정 번호 부여
                 })
                 
                 # 우측 페이지
@@ -239,49 +276,70 @@ class SplitPDFEditor:
                     'image_data': right_img_data,
                     'description': f"원본 {page_num + 1}페이지 우측",
                     'original_page': page_num,
-                    'split_part': 'right'
+                    'split_part': 'right',
+                    'fixed_number': len(all_pages) + 1  # 고정 번호 부여
                 })
                     
             else:
-                # 세로 페이지는 그대로
-                pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5))
+                # 세로 페이지는 그대로 (미리보기용 낮은 해상도)
+                preview_matrix = fitz.Matrix(1.0, 1.0)  # 미리보기용 낮은 해상도
+                pix = page.get_pixmap(matrix=preview_matrix)
                 img_data = pix.tobytes("png")
                 all_pages.append({
                     'image_data': img_data,
                     'description': f"원본 {page_num + 1}페이지",
                     'original_page': page_num,
-                    'split_part': 'single'
+                    'split_part': 'single',
+                    'fixed_number': len(all_pages) + 1  # 고정 번호 부여
                 })
         
         doc.close()
         
-        # 첫 페이지 사용 여부에 따라 조정
-        if not use_first_page and len(all_pages) > 0:
-            all_pages = all_pages[1:]  # 첫 페이지 제거
+        if progress_callback:
+            progress_callback(total_pages, total_pages, "페이지 순서 정리 중...")
         
-        # 페이지 순서에 따라 재배열 (모든 페이지에 적용)
-        if len(all_pages) > 0:
-            # 페이지 순서 매핑을 전체 페이지에 적용
-            order_map = {
-                "1234": lambda pages: pages,  # 순서 그대로
-                "2341": lambda pages: pages[1:] + [pages[0]] if len(pages) > 0 else pages  # 첫 페이지를 마지막으로
-            }
-            
-            if page_order in order_map:
-                reordered_pages = order_map[page_order](all_pages)
-            else:
-                reordered_pages = all_pages
+        # 첫 페이지 사용 여부에 따라 조정 (고정 번호 재계산)
+        if not use_first_page and len(all_pages) > 0:
+            removed_page = all_pages.pop(0)  # 첫 페이지 제거
+            # 나머지 페이지들의 고정 번호를 1씩 앞당김
+            for page_info in all_pages:
+                page_info['fixed_number'] -= 1
+        
+        # 페이지 순서에 따라 재배열 (고정 번호는 그대로 유지)
+        if page_order == "2341":
+            # 2341 순서: 4페이지 단위로 2,3,4,1 패턴 적용
+            reordered_pages = []
+            for i in range(0, len(all_pages), 4):
+                # 현재 4페이지 블록 가져오기
+                current_block = all_pages[i:i+4]
+                if len(current_block) >= 4:
+                    # 2,3,4,1 순서로 재배열
+                    reordered_block = [current_block[1], current_block[2], current_block[3], current_block[0]]
+                    reordered_pages.extend(reordered_block)
+                else:
+                    # 4개 미만인 경우 그대로 추가
+                    reordered_pages.extend(current_block)
         else:
+            # 1234 순서: 순서 그대로
             reordered_pages = all_pages
         
         # 최종 미리보기 이미지 생성 (홀수/짝수별 여백 정보 및 경계선 포함)
         preview_images = []
-        for i, page_info in enumerate(reordered_pages[:max_pages]):
-            page_number = i + 1
-            margins = self.calculate_margins_for_page(page_number, margin_top, margin_bottom, margin_outer, margin_inner)
+        selected_pages = reordered_pages[:max_pages]
+        
+        for i, page_info in enumerate(selected_pages):
+            if progress_callback:
+                progress_callback(i + 1, len(selected_pages), f"미리보기 {i + 1}/{len(selected_pages)} 생성 중...")
             
-            # 홀수/짝수별 설정 정보
-            if page_number % 2 == 1:  # 홀수 페이지
+            # 미리보기에서의 페이지 번호 (표시용)
+            display_page_number = i + 1
+            # 고정된 실제 페이지 번호
+            fixed_page_number = page_info['fixed_number']
+            
+            margins = self.calculate_margins_for_page(display_page_number, margin_top, margin_bottom, margin_outer, margin_inner)
+            
+            # 홀수/짝수별 설정 정보 (미리보기 페이지 번호 기준)
+            if display_page_number % 2 == 1:  # 홀수 페이지
                 current_scale = scale_factor_odd
                 current_offset_x = offset_x_odd
                 current_offset_y = offset_y_odd
@@ -294,20 +352,30 @@ class SplitPDFEditor:
             
             # 여백 경계선이 추가된 이미지 생성 (홀수/짝수별 축소/이동 효과 포함)
             bordered_image_data = self.add_margin_borders_to_image(
-                page_info['image_data'], page_number, margin_top, margin_bottom, margin_outer, margin_inner,
+                page_info['image_data'], display_page_number, margin_top, margin_bottom, margin_outer, margin_inner,
                 scale_factor_odd, offset_x_odd, offset_y_odd,
                 scale_factor_even, offset_x_even, offset_y_even
             )
             
+            # 원본 페이지 번호 오버레이 추가 (고정 번호 사용)
+            if show_page_numbers:
+                bordered_image_data = self.add_page_number_overlay_with_fixed_number(
+                    bordered_image_data, fixed_page_number
+                )
+            
             preview_images.append({
-                'page_number': page_number,
+                'page_number': display_page_number,
+                'fixed_page_number': fixed_page_number,
                 'image_data': bordered_image_data,
-                'description': f"페이지 {page_number} ({page_info['description']})",
+                'description': f"페이지 {display_page_number} ({page_info['description']})",
                 'margins': margins,
                 'margin_info': f"위{margins['top']}mm, 아래{margins['bottom']}mm, 왼쪽{margins['left']}mm, 오른쪽{margins['right']}mm",
                 'page_type': page_type,
                 'scale_info': f"축소{int(current_scale*100)}%, 이동({current_offset_x:+.0f},{current_offset_y:+.0f}mm)"
             })
+        
+        if progress_callback:
+            progress_callback(len(selected_pages), len(selected_pages), "미리보기 완료!")
         
         return preview_images
     
@@ -315,7 +383,8 @@ class SplitPDFEditor:
                          margin_outer=15, margin_inner=15, split_direction='vertical',
                          use_first_page=True, page_order="1234", 
                          scale_factor_odd=1.0, offset_x_odd=0, offset_y_odd=0,
-                         scale_factor_even=1.0, offset_x_even=0, offset_y_even=0):
+                         scale_factor_even=1.0, offset_x_even=0, offset_y_even=0,
+                         show_borders=False):
         """PDF 내용을 책 페이지 크기로 변환 - 홀수/짝수별 설정 적용"""
         
         # 원본 PDF 읽기
@@ -346,8 +415,9 @@ class SplitPDFEditor:
                 all_pages.append(right_img_path)
                 
             else:
-                # 세로 페이지는 그대로 처리
-                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+                # 세로 페이지는 그대로 처리 (고해상도)
+                high_res_matrix = fitz.Matrix(4.0, 4.0)  # 고해상도 렌더링
+                pix = page.get_pixmap(matrix=high_res_matrix)
                 img_path = self.save_pixmap_to_image(pix, f"page_{page_num}")
                 all_pages.append(img_path)
         
@@ -358,14 +428,21 @@ class SplitPDFEditor:
             all_pages = all_pages[1:]  # 첫 페이지 제거
         
         # 페이지 순서에 따라 재배열 (모든 페이지에 적용)
-        order_map = {
-            "1234": lambda pages: pages,  # 순서 그대로
-            "2341": lambda pages: pages[1:] + [pages[0]] if len(pages) > 0 else pages  # 첫 페이지를 마지막으로
-        }
-        
-        if page_order in order_map:
-            reordered_pages = order_map[page_order](all_pages)
+        if page_order == "2341":
+            # 2341 순서: 4페이지 단위로 2,3,4,1 패턴 적용
+            reordered_pages = []
+            for i in range(0, len(all_pages), 4):
+                # 현재 4페이지 블록 가져오기
+                current_block = all_pages[i:i+4]
+                if len(current_block) >= 4:
+                    # 2,3,4,1 순서로 재배열
+                    reordered_block = [current_block[1], current_block[2], current_block[3], current_block[0]]
+                    reordered_pages.extend(reordered_block)
+                else:
+                    # 4개 미만인 경우 그대로 추가
+                    reordered_pages.extend(current_block)
         else:
+            # 1234 순서: 순서 그대로
             reordered_pages = all_pages
         
         total_pages = 0
@@ -391,7 +468,8 @@ class SplitPDFEditor:
                     c, img_path, content_width, content_height, 
                     margin_left_pt, margin_bottom_pt, page_number,
                     scale_factor_odd, offset_x_odd, offset_y_odd,
-                    scale_factor_even, offset_x_even, offset_y_even
+                    scale_factor_even, offset_x_even, offset_y_even,
+                    show_borders, self.book_width, self.book_height
                 )
                 total_pages += 1
                 os.unlink(img_path)  # 임시 파일 삭제
@@ -408,18 +486,24 @@ class SplitPDFEditor:
         return output, total_pages
     
     def save_pixmap_to_image(self, pixmap, filename):
-        """Pixmap을 이미지 파일로 저장"""
+        """Pixmap을 고품질 이미지 파일로 저장"""
+        # PNG 대신 고품질 JPEG로 저장하여 용량 최적화하면서 품질 유지
         img_data = pixmap.tobytes("png")
         
+        # PIL을 통해 고품질로 재저장
         with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as img_file:
-            img_file.write(img_data)
+            # 원본 PNG 데이터를 PIL로 열어서 고품질로 재저장
+            pil_img = Image.open(io.BytesIO(img_data))
+            # 고품질 PNG로 저장 (압축 레벨 낮춤)
+            pil_img.save(img_file.name, 'PNG', compress_level=1, optimize=False)
             return img_file.name
     
     def add_page_to_book(self, canvas_obj, image_path, content_width, content_height, 
                         margin_left_pt, margin_bottom_pt, page_number,
                         scale_factor_odd=1.0, offset_x_odd=0, offset_y_odd=0,
-                        scale_factor_even=1.0, offset_x_even=0, offset_y_even=0):
-        """이미지를 책 페이지에 추가 (홀수/짝수 페이지별 축소 및 이동 기능)"""
+                        scale_factor_even=1.0, offset_x_even=0, offset_y_even=0,
+                        show_borders=False, book_width=None, book_height=None):
+        """이미지를 책 페이지에 추가 (홀수/짝수 페이지별 축소 및 이동 기능, 경계선 옵션)"""
         
         # 홀수/짝수 페이지에 따라 다른 설정 사용
         if page_number % 2 == 1:  # 홀수 페이지
@@ -479,6 +563,30 @@ class SplitPDFEditor:
         canvas_obj.drawImage(adjusted_img_path, final_x, final_y, 
                            width=actual_width_pt, height=actual_height_pt)
         
+        # 여백 경계선 그리기 (옵션)
+        if show_borders and book_width and book_height:
+            # 홀수/짝수에 따른 색상 선택
+            if page_number % 2 == 1:  # 홀수 페이지
+                border_color = (1, 0, 0)  # 빨간색 (RGB 0-1 범위)
+            else:  # 짝수 페이지
+                border_color = (0, 0, 1)  # 파란색
+            
+            canvas_obj.setStrokeColorRGB(*border_color)
+            canvas_obj.setLineWidth(1)
+            
+            # 여백 경계선 그리기
+            margin_right_pt = book_width - margin_left_pt - content_width
+            margin_top_pt = book_height - margin_bottom_pt - content_height
+            
+            # 상단 경계선
+            canvas_obj.line(0, book_height - margin_top_pt, book_width, book_height - margin_top_pt)
+            # 하단 경계선  
+            canvas_obj.line(0, margin_bottom_pt, book_width, margin_bottom_pt)
+            # 좌측 경계선
+            canvas_obj.line(margin_left_pt, 0, margin_left_pt, book_height)
+            # 우측 경계선
+            canvas_obj.line(book_width - margin_right_pt, 0, book_width - margin_right_pt, book_height)
+        
         canvas_obj.showPage()
         
         # 임시 파일 정리
@@ -522,14 +630,170 @@ class SplitPDFEditor:
                 new_width = img_width * scale_factor
                 new_height = img_height * scale_factor
             
-            # 이미지 리사이즈
+            # 고품질 이미지 리사이즈
             resized_img = img.resize((int(new_width), int(new_height)), Image.Resampling.LANCZOS)
             
-            # 새 이미지 파일로 저장
+            # 새 이미지 파일로 고품질 저장
             output_path = image_path.replace('.png', '_resized.png')
-            resized_img.save(output_path, 'PNG')
+            # PNG 압축 레벨을 낮춰서 품질 향상 (0=무압축, 9=최대압축)
+            resized_img.save(output_path, 'PNG', compress_level=1, optimize=False)
             
             return output_path
+
+    def add_page_number_overlay(self, image_data, original_page, split_part):
+        """이미지 하단에 원본 페이지 번호 오버레이 추가"""
+        from PIL import ImageFont, ImageDraw
+        
+        # PIL Image로 변환
+        image = Image.open(io.BytesIO(image_data))
+        draw = ImageDraw.Draw(image)
+        
+        # 이미지 크기
+        img_width, img_height = image.size
+        
+        # 페이지 번호 텍스트 생성
+        if split_part == 'left':
+            page_text = f"원본 {original_page + 1}페이지 (좌측)"
+        elif split_part == 'right':
+            page_text = f"원본 {original_page + 1}페이지 (우측)"
+        else:
+            page_text = f"원본 {original_page + 1}페이지"
+        
+        # 폰트 크기 계산 (이미지 크기에 비례)
+        font_size = max(16, min(32, img_width // 25))
+        
+        try:
+            # 시스템 기본 폰트 사용 시도
+            font = ImageFont.truetype("arial.ttf", font_size)
+        except:
+            try:
+                # Windows 기본 폰트
+                font = ImageFont.truetype("C:/Windows/Fonts/malgun.ttf", font_size)
+            except:
+                # 기본 폰트 사용
+                font = ImageFont.load_default()
+        
+        # 텍스트 크기 계산
+        bbox = draw.textbbox((0, 0), page_text, font=font)
+        text_width = bbox[2] - bbox[0]
+        text_height = bbox[3] - bbox[1]
+        
+        # 텍스트 위치 (하단 중앙)
+        text_x = (img_width - text_width) // 2
+        text_y = img_height - text_height - 10
+        
+        # 배경 박스 그리기 (반투명 검은색)
+        padding = 5
+        box_coords = [
+            text_x - padding,
+            text_y - padding,
+            text_x + text_width + padding,
+            text_y + text_height + padding
+        ]
+        
+        # 반투명 배경을 위해 별도 이미지 생성
+        overlay = Image.new('RGBA', image.size, (0, 0, 0, 0))
+        overlay_draw = ImageDraw.Draw(overlay)
+        
+        # 반투명 검은색 배경
+        overlay_draw.rectangle(box_coords, fill=(0, 0, 0, 180))
+        
+        # 원본 이미지가 RGB 모드가 아니면 변환
+        if image.mode != 'RGBA':
+            image = image.convert('RGBA')
+        
+        # 오버레이 합성
+        image = Image.alpha_composite(image, overlay)
+        
+        # 텍스트 그리기 (흰색)
+        final_draw = ImageDraw.Draw(image)
+        final_draw.text((text_x, text_y), page_text, fill=(255, 255, 255, 255), font=font)
+        
+        # RGB로 변환 (PNG 저장을 위해)
+        if image.mode == 'RGBA':
+            background = Image.new('RGB', image.size, (255, 255, 255))
+            background.paste(image, mask=image.split()[-1])  # 알파 채널을 마스크로 사용
+            image = background
+        
+        # 이미지를 바이트로 변환하여 반환
+        output = io.BytesIO()
+        image.save(output, format='PNG')
+        return output.getvalue()
+
+    def add_page_number_overlay_with_fixed_number(self, image_data, fixed_page_number):
+        """이미지 하단에 고정된 페이지 번호 오버레이 추가"""
+        from PIL import ImageFont, ImageDraw
+        
+        # PIL Image로 변환
+        image = Image.open(io.BytesIO(image_data))
+        draw = ImageDraw.Draw(image)
+        
+        # 이미지 크기
+        img_width, img_height = image.size
+        
+        # 페이지 번호 텍스트 생성
+        page_text = f"페이지 {fixed_page_number}"
+        
+        # 폰트 크기 계산 (이미지 크기에 비례)
+        font_size = max(16, min(32, img_width // 25))
+        
+        try:
+            # 시스템 기본 폰트 사용 시도
+            font = ImageFont.truetype("arial.ttf", font_size)
+        except:
+            try:
+                # Windows 기본 폰트
+                font = ImageFont.truetype("C:/Windows/Fonts/malgun.ttf", font_size)
+            except:
+                # 기본 폰트 사용
+                font = ImageFont.load_default()
+        
+        # 텍스트 크기 계산
+        bbox = draw.textbbox((0, 0), page_text, font=font)
+        text_width = bbox[2] - bbox[0]
+        text_height = bbox[3] - bbox[1]
+        
+        # 텍스트 위치 (하단 중앙)
+        text_x = (img_width - text_width) // 2
+        text_y = img_height - text_height - 10
+        
+        # 배경 박스 그리기 (반투명 검은색)
+        padding = 5
+        box_coords = [
+            text_x - padding,
+            text_y - padding,
+            text_x + text_width + padding,
+            text_y + text_height + padding
+        ]
+        
+        # 반투명 배경을 위해 별도 이미지 생성
+        overlay = Image.new('RGBA', image.size, (0, 0, 0, 0))
+        overlay_draw = ImageDraw.Draw(overlay)
+        
+        # 반투명 검은색 배경
+        overlay_draw.rectangle(box_coords, fill=(0, 0, 0, 180))
+        
+        # 원본 이미지가 RGB 모드가 아니면 변환
+        if image.mode != 'RGBA':
+            image = image.convert('RGBA')
+        
+        # 오버레이 합성
+        image = Image.alpha_composite(image, overlay)
+        
+        # 텍스트 그리기 (흰색)
+        final_draw = ImageDraw.Draw(image)
+        final_draw.text((text_x, text_y), page_text, fill=(255, 255, 255, 255), font=font)
+        
+        # RGB로 변환 (PNG 저장을 위해)
+        if image.mode == 'RGBA':
+            background = Image.new('RGB', image.size, (255, 255, 255))
+            background.paste(image, mask=image.split()[-1])  # 알파 채널을 마스크로 사용
+            image = background
+        
+        # 이미지를 바이트로 변환하여 반환
+        output = io.BytesIO()
+        image.save(output, format='PNG')
+        return output.getvalue()
 
 def main():
     st.set_page_config(
@@ -567,12 +831,14 @@ def main():
             "1234": "1,2,3,4 순서",
             "2341": "2,3,4,1 순서"
         }[x],
-        help="최종 PDF의 페이지 순서를 선택"
+        help="최종 PDF의 페이지 순서를 선택 (처음 4페이지 기준으로 재배열)"
     )
     
     # 미리보기 설정
     st.sidebar.subheader("미리보기 설정")
     show_preview = st.sidebar.checkbox("분할 미리보기 표시", value=True)
+    show_page_numbers = st.sidebar.checkbox("원본 페이지 번호 표시", value=True, 
+                                          help="미리보기 이미지 하단에 원본 페이지 번호 표시")
     
     # 파일 업로드
     uploaded_file = st.file_uploader(
@@ -582,18 +848,18 @@ def main():
     )
     
     if uploaded_file is not None:
-        # 파일 정보 표시
-        st.subheader("📄 파일 정보")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.write(f"**파일명:** {uploaded_file.name}")
-            st.write(f"**파일 크기:** {uploaded_file.size / 1024:.1f} KB")
-        
-        with col2:
-            st.write(f"**최종 크기:** 125×175mm")
-            st.write(f"**첫 페이지:** {'사용' if use_first_page else '사용 안함'}")
-            st.write(f"**페이지 순서:** {page_order}")
+        # 파일 정보 표시 (접힌 상태)
+        with st.expander("📄 파일 정보", expanded=False):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write(f"**파일명:** {uploaded_file.name}")
+                st.write(f"**파일 크기:** {uploaded_file.size / 1024:.1f} KB")
+            
+            with col2:
+                st.write(f"**최종 크기:** 125×175mm")
+                st.write(f"**첫 페이지:** {'사용' if use_first_page else '사용 안함'}")
+                st.write(f"**페이지 순서:** {page_order}")
         
         # 임시 파일로 저장
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
@@ -605,24 +871,25 @@ def main():
             editor = SplitPDFEditor()
             analysis = editor.analyze_pdf_content(tmp_file_path)
             
-            st.subheader("📊 PDF 분석 결과")
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                st.metric("원본 페이지 수", analysis['total_pages'])
-            
-            with col2:
-                st.metric("이미지 개수", analysis['image_count'])
-            
-            with col3:
-                if analysis['is_landscape']:
-                    st.metric("가로 페이지", "있음")
-                else:
-                    st.metric("가로 페이지", "없음")
-            
-            with col4:
-                avg_text_length = sum(len(text) for text in analysis['text_content']) / len(analysis['text_content'])
-                st.metric("평균 텍스트 길이", f"{avg_text_length:.0f}자")
+            # PDF 분석 결과 (접힌 상태)
+            with st.expander("📊 PDF 분석 결과", expanded=False):
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    st.metric("원본 페이지 수", analysis['total_pages'])
+                
+                with col2:
+                    st.metric("이미지 개수", analysis['image_count'])
+                
+                with col3:
+                    if analysis['is_landscape']:
+                        st.metric("가로 페이지", "있음")
+                    else:
+                        st.metric("가로 페이지", "없음")
+                
+                with col4:
+                    avg_text_length = sum(len(text) for text in analysis['text_content']) / len(analysis['text_content'])
+                    st.metric("평균 텍스트 길이", f"{avg_text_length:.0f}자")
             
             # 예상 결과 페이지 수 계산
             expected_pages = 0
@@ -640,98 +907,204 @@ def main():
             final_pages = min(expected_pages, 4)
             
             st.info(f"📋 **최종 페이지 수:** {final_pages}페이지 ({page_order} 순서)")
-            
-            # 여백 설정 (미리보기 이후에 배치)
-            st.subheader("📏 여백 설정")
-            st.markdown("**책 제본을 위한 여백 설정**")
-            
-            col1, col2, col3, col4 = st.columns(4)
-            
+            col1, col2 = st.columns(2)
             with col1:
-                margin_top = st.slider("위 (상단 여백)", 5, 40, 15, help="모든 페이지의 상단 여백")
-            
+                st.success("🎯 **PDF 저장**: 300 DPI 고해상도")
             with col2:
-                margin_bottom = st.slider("아래 (하단 여백)", 5, 40, 15, help="모든 페이지의 하단 여백")
+                st.info("⚡ **미리보기**: 75 DPI (초고속 로딩)")
             
-            with col3:
-                margin_outer = st.slider("바깥쪽", 5, 40, 20, help="홀수 페이지 오른쪽, 짝수 페이지 왼쪽 여백")
+            # 여백 설정 (접힌 상태)
+            with st.expander("📏 여백 설정", expanded=False):
+                st.markdown("**책 제본을 위한 여백 설정**")
+                
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    margin_top = st.number_input(
+                        "위 (상단 여백)", 
+                        min_value=0, 
+                        max_value=50, 
+                        value=15, 
+                        step=1,
+                        help="모든 페이지의 상단 여백 (mm)"
+                    )
+                
+                with col2:
+                    margin_bottom = st.number_input(
+                        "아래 (하단 여백)", 
+                        min_value=0, 
+                        max_value=50, 
+                        value=15, 
+                        step=1,
+                        help="모든 페이지의 하단 여백 (mm)"
+                    )
+                
+                with col3:
+                    margin_outer = st.number_input(
+                        "바깥쪽", 
+                        min_value=0, 
+                        max_value=50, 
+                        value=20, 
+                        step=1,
+                        help="홀수 페이지 오른쪽, 짝수 페이지 왼쪽 여백 (mm)"
+                    )
+                
+                with col4:
+                    margin_inner = st.number_input(
+                        "안쪽", 
+                        min_value=0, 
+                        max_value=50, 
+                        value=15, 
+                        step=1,
+                        help="홀수 페이지 왼쪽, 짝수 페이지 오른쪽 여백 (mm, 제본 부분)"
+                    )
+                
+                # 여백 설명
+                st.markdown("""
+                **여백 설명:**
+                - **위/아래**: 모든 페이지의 상단/하단 여백
+                - **바깥쪽**: 홀수 페이지(1,3,5...)의 왼쪽, 짝수 페이지(2,4,6...)의 오른쪽 여백
+                - **안쪽**: 홀수 페이지(1,3,5...)의 오른쪽, 짝수 페이지(2,4,6...)의 왼쪽 여백 (제본 부분)
+                """)
             
-            with col4:
-                margin_inner = st.slider("안쪽", 5, 40, 15, help="홀수 페이지 왼쪽, 짝수 페이지 오른쪽 여백 (제본 부분)")
-            
-            # 여백 설명
-            st.markdown("""
-            **여백 설명:**
-            - **위/아래**: 모든 페이지의 상단/하단 여백
-            - **바깥쪽**: 홀수 페이지(1,3,5...)의 왼쪽, 짝수 페이지(2,4,6...)의 오른쪽 여백
-            - **안쪽**: 홀수 페이지(1,3,5...)의 오른쪽, 짝수 페이지(2,4,6...)의 왼쪽 여백 (제본 부분)
-            """)
-            
-            # 페이지 조정 설정
-            st.subheader("🎛️ 페이지 조정")
-            st.markdown("**홀수/짝수 페이지별 축소 및 위치 조정**")
-            
-            # 홀수 페이지 설정
-            st.markdown("#### 📄 홀수 페이지 (1, 3, 5...) - 빨간색 경계선")
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                scale_factor_odd = st.slider("홀수 축소 비율", 0.5, 1.0, 1.0, 0.05, help="홀수 페이지 축소 비율 (1.0 = 원본 크기)")
-            
-            with col2:
-                offset_x_odd = st.slider("홀수 좌우 이동", -20, 20, 0, 1, help="홀수 페이지를 좌우로 이동 (mm)")
-            
-            with col3:
-                offset_y_odd = st.slider("홀수 상하 이동", -20, 20, 0, 1, help="홀수 페이지를 상하로 이동 (mm)")
-            
-            with col4:
-                st.markdown("**홀수 페이지 상태**")
-                st.write(f"축소: {int(scale_factor_odd*100)}%")
-                direction_odd = ""
-                if offset_x_odd > 0:
-                    direction_odd += "→"
-                elif offset_x_odd < 0:
-                    direction_odd += "←"
-                if offset_y_odd > 0:
-                    direction_odd += "↑"
-                elif offset_y_odd < 0:
-                    direction_odd += "↓"
-                st.write(f"이동: {direction_odd if direction_odd else '중앙'}")
-            
-            # 짝수 페이지 설정
-            st.markdown("#### 📄 짝수 페이지 (2, 4, 6...) - 파란색 경계선")
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                scale_factor_even = st.slider("짝수 축소 비율", 0.5, 1.0, 1.0, 0.05, help="짝수 페이지 축소 비율 (1.0 = 원본 크기)")
-            
-            with col2:
-                offset_x_even = st.slider("짝수 좌우 이동", -20, 20, 0, 1, help="짝수 페이지를 좌우로 이동 (mm)")
-            
-            with col3:
-                offset_y_even = st.slider("짝수 상하 이동", -20, 20, 0, 1, help="짝수 페이지를 상하로 이동 (mm)")
-            
-            with col4:
-                st.markdown("**짝수 페이지 상태**")
-                st.write(f"축소: {int(scale_factor_even*100)}%")
-                direction_even = ""
-                if offset_x_even > 0:
-                    direction_even += "→"
-                elif offset_x_even < 0:
-                    direction_even += "←"
-                if offset_y_even > 0:
-                    direction_even += "↑"
-                elif offset_y_even < 0:
-                    direction_even += "↓"
-                st.write(f"이동: {direction_even if direction_even else '중앙'}")
-            
-            # 페이지 조정 설명
-            st.markdown("""
-            **페이지 조정 설명:**
-            - **축소 비율**: 페이지 내용의 크기를 조절합니다 (여백은 그대로 유지)
-            - **좌우 이동**: 양수는 오른쪽, 음수는 왼쪽으로 이동
-            - **상하 이동**: 양수는 위쪽, 음수는 아래쪽으로 이동
-            """)
+            # 페이지 조정 설정 (접힌 상태)
+            with st.expander("🎛️ 페이지 조정", expanded=False):
+                st.markdown("**홀수/짝수 페이지별 축소 및 위치 조정**")
+                
+                # 홀수 페이지 설정
+                st.markdown("#### 📄 홀수 페이지 (1, 3, 5...) - 빨간색 경계선")
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    scale_factor_odd = st.number_input(
+                        "홀수 축소 비율", 
+                        min_value=0.10, 
+                        max_value=2.00, 
+                        value=1.00, 
+                        step=0.01,
+                        format="%.2f",
+                        help="홀수 페이지 축소 비율 (1.00 = 원본 크기, 소수점 2자리까지 입력 가능)"
+                    )
+                
+                with col2:
+                    offset_x_odd = st.number_input(
+                        "홀수 좌우 이동", 
+                        min_value=-50.0, 
+                        max_value=50.0, 
+                        value=0.0, 
+                        step=0.1,
+                        format="%.1f",
+                        help="홀수 페이지를 좌우로 이동 (mm, 양수=오른쪽, 음수=왼쪽)"
+                    )
+                
+                with col3:
+                    offset_y_odd = st.number_input(
+                        "홀수 상하 이동", 
+                        min_value=-50.0, 
+                        max_value=50.0, 
+                        value=0.0, 
+                        step=0.1,
+                        format="%.1f",
+                        help="홀수 페이지를 상하로 이동 (mm, 양수=위쪽, 음수=아래쪽)"
+                    )
+                
+                with col4:
+                    st.markdown("**홀수 페이지 상태**")
+                    st.write(f"축소: {scale_factor_odd:.2f} ({int(scale_factor_odd*100)}%)")
+                    direction_odd = ""
+                    if offset_x_odd > 0:
+                        direction_odd += "→"
+                    elif offset_x_odd < 0:
+                        direction_odd += "←"
+                    if offset_y_odd > 0:
+                        direction_odd += "↑"
+                    elif offset_y_odd < 0:
+                        direction_odd += "↓"
+                    st.write(f"이동: {direction_odd if direction_odd else '중앙'}")
+                    
+                    # 축소 비율 가이드
+                    if scale_factor_odd < 0.5:
+                        st.warning("⚠️ 매우 작음")
+                    elif scale_factor_odd < 0.8:
+                        st.info("ℹ️ 작음")
+                    elif scale_factor_odd > 1.5:
+                        st.warning("⚠️ 매우 큼")
+                    elif scale_factor_odd > 1.2:
+                        st.info("ℹ️ 큼")
+                    else:
+                        st.success("✅ 적당함")
+                
+                # 짝수 페이지 설정
+                st.markdown("#### 📄 짝수 페이지 (2, 4, 6...) - 파란색 경계선")
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    scale_factor_even = st.number_input(
+                        "짝수 축소 비율", 
+                        min_value=0.10, 
+                        max_value=2.00, 
+                        value=1.00, 
+                        step=0.01,
+                        format="%.2f",
+                        help="짝수 페이지 축소 비율 (1.00 = 원본 크기, 소수점 2자리까지 입력 가능)"
+                    )
+                
+                with col2:
+                    offset_x_even = st.number_input(
+                        "짝수 좌우 이동", 
+                        min_value=-50.0, 
+                        max_value=50.0, 
+                        value=0.0, 
+                        step=0.1,
+                        format="%.1f",
+                        help="짝수 페이지를 좌우로 이동 (mm, 양수=오른쪽, 음수=왼쪽)"
+                    )
+                
+                with col3:
+                    offset_y_even = st.number_input(
+                        "짝수 상하 이동", 
+                        min_value=-50.0, 
+                        max_value=50.0, 
+                        value=0.0, 
+                        step=0.1,
+                        format="%.1f",
+                        help="짝수 페이지를 상하로 이동 (mm, 양수=위쪽, 음수=아래쪽)"
+                    )
+                
+                with col4:
+                    st.markdown("**짝수 페이지 상태**")
+                    st.write(f"축소: {scale_factor_even:.2f} ({int(scale_factor_even*100)}%)")
+                    direction_even = ""
+                    if offset_x_even > 0:
+                        direction_even += "→"
+                    elif offset_x_even < 0:
+                        direction_even += "←"
+                    if offset_y_even > 0:
+                        direction_even += "↑"
+                    elif offset_y_even < 0:
+                        direction_even += "↓"
+                    st.write(f"이동: {direction_even if direction_even else '중앙'}")
+                    
+                    # 축소 비율 가이드
+                    if scale_factor_even < 0.5:
+                        st.warning("⚠️ 매우 작음")
+                    elif scale_factor_even < 0.8:
+                        st.info("ℹ️ 작음")
+                    elif scale_factor_even > 1.5:
+                        st.warning("⚠️ 매우 큼")
+                    elif scale_factor_even > 1.2:
+                        st.info("ℹ️ 큼")
+                    else:
+                        st.success("✅ 적당함")
+                
+                # 페이지 조정 설명
+                st.markdown("""
+                **페이지 조정 설명:**
+                - **축소 비율**: 페이지 내용의 크기를 0.10~2.00 범위에서 소수점 2자리까지 정밀 조절 (여백은 그대로 유지)
+                - **좌우 이동**: -50.0~50.0mm 범위에서 소수점 1자리까지 정밀 조절 (양수=오른쪽, 음수=왼쪽)
+                - **상하 이동**: -50.0~50.0mm 범위에서 소수점 1자리까지 정밀 조절 (양수=위쪽, 음수=아래쪽)
+                - **홀수/짝수**: 각각 독립적으로 설정 가능하며, 미리보기에서 빨간색/파란색 경계선으로 구분
+                """)
             
             # 미리보기 표시
             if show_preview and analysis['is_landscape']:
@@ -741,8 +1114,45 @@ def main():
                 if 'preview_page_start' not in st.session_state:
                     st.session_state.preview_page_start = 0
                 
-                with st.spinner("미리보기 이미지를 생성하는 중..."):
+                # 미리보기 설정 해시 생성 (설정 변경 감지용)
+                current_settings = {
+                    'split_direction': split_direction,
+                    'use_first_page': use_first_page,
+                    'page_order': page_order,
+                    'margin_top': margin_top,
+                    'margin_bottom': margin_bottom,
+                    'margin_outer': margin_outer,
+                    'margin_inner': margin_inner,
+                    'scale_factor_odd': scale_factor_odd,
+                    'offset_x_odd': offset_x_odd,
+                    'offset_y_odd': offset_y_odd,
+                    'scale_factor_even': scale_factor_even,
+                    'offset_x_even': offset_x_even,
+                    'offset_y_even': offset_y_even,
+                    'show_page_numbers': show_page_numbers,
+                    'file_hash': hash(uploaded_file.getvalue()) if uploaded_file else None
+                }
+                
+                # 설정이 변경되었는지 확인
+                settings_changed = (
+                    'preview_settings' not in st.session_state or 
+                    st.session_state.preview_settings != current_settings or
+                    'cached_preview_images' not in st.session_state
+                )
+                
+                # 설정이 변경된 경우에만 미리보기 재생성
+                if settings_changed:
+                    # 프로그래스바와 상태 메시지를 위한 컨테이너
+                    progress_container = st.empty()
+                    status_container = st.empty()
+                    
                     try:
+                        # 프로그래스 콜백 함수 정의
+                        def update_progress(current, total, description):
+                            progress_value = current / total if total > 0 else 0
+                            progress_container.progress(progress_value)
+                            status_container.info(f"📊 {description}")
+                        
                         # 전체 미리보기 이미지 생성 (모든 페이지)
                         all_preview_images = editor.generate_preview_images(
                             tmp_file_path, 
@@ -759,69 +1169,106 @@ def main():
                             offset_y_odd=offset_y_odd,
                             scale_factor_even=scale_factor_even,
                             offset_x_even=offset_x_even,
-                            offset_y_even=offset_y_even
+                            offset_y_even=offset_y_even,
+                            show_page_numbers=show_page_numbers,
+                            progress_callback=update_progress
                         )
                         
-                        if all_preview_images:
-                            total_pages = len(all_preview_images)
-                            current_start = st.session_state.preview_page_start
-                            current_end = min(current_start + 4, total_pages)
-                            
-                            # 페이지 네비게이션 컨트롤
-                            col1, col2, col3, col4, col5 = st.columns([1, 1, 2, 1, 1])
-                            
-                            with col1:
-                                if st.button("⏮️ 처음", disabled=(current_start == 0)):
-                                    st.session_state.preview_page_start = 0
-                                    st.rerun()
-                            
-                            with col2:
-                                if st.button("◀️ 이전", disabled=(current_start == 0)):
-                                    st.session_state.preview_page_start = max(0, current_start - 4)
-                                    st.rerun()
-                            
-                            with col3:
-                                st.write(f"**페이지 {current_start + 1}-{current_end} / 총 {total_pages}페이지**")
-                            
-                            with col4:
-                                if st.button("다음 ▶️", disabled=(current_end >= total_pages)):
-                                    st.session_state.preview_page_start = min(current_start + 4, total_pages - 4)
-                                    st.rerun()
-                            
-                            with col5:
-                                if st.button("마지막 ⏭️", disabled=(current_end >= total_pages)):
-                                    st.session_state.preview_page_start = max(0, total_pages - 4)
-                                    st.rerun()
-                            
-                            # 현재 페이지 범위의 미리보기 표시
-                            current_preview_images = all_preview_images[current_start:current_end]
-                            
-                            if current_preview_images:
-                                # 2열로 미리보기 표시
-                                cols = st.columns(2)
-                                for i, img_info in enumerate(current_preview_images):
-                                    col_idx = i % 2
-                                    with cols[col_idx]:
-                                        st.write(f"**{img_info['description']}**")
-                                        st.write(f"*여백: {img_info['margin_info']}*")
-                                        st.write(f"*조정: {img_info['scale_info']}*")
-                                        
-                                        # 홀수/짝수에 따른 색상 표시
-                                        if img_info['page_type'] == '홀수':
-                                            border_info = "🔴 홀수 페이지 (빨간 경계선)"
-                                        else:
-                                            border_info = "🔵 짝수 페이지 (파란 경계선)"
-                                        
-                                        st.image(
-                                            img_info['image_data'], 
-                                            caption=f"최종 페이지 {img_info['page_number']} - {border_info}",
-                                            use_column_width=True
-                                        )
-                        else:
-                            st.warning("미리보기 이미지를 생성할 수 없습니다.")
-                            
+                        # 프로그래스바와 상태 메시지 제거
+                        progress_container.empty()
+                        status_container.empty()
+                        
+                        # 캐시에 저장
+                        st.session_state.cached_preview_images = all_preview_images
+                        st.session_state.preview_settings = current_settings
+                        
                     except Exception as e:
+                        # 프로그래스바와 상태 메시지 제거
+                        progress_container.empty()
+                        status_container.empty()
                         st.error(f"미리보기 생성 중 오류: {str(e)}")
+                        all_preview_images = []
+                else:
+                    # 캐시된 미리보기 사용
+                    all_preview_images = st.session_state.cached_preview_images
+                    st.info("💾 캐시된 미리보기를 사용합니다.")
+                    
+                if all_preview_images:
+                    total_pages = len(all_preview_images)
+                    current_start = st.session_state.preview_page_start
+                    current_end = min(current_start + 4, total_pages)
+                    
+                    # 페이지 네비게이션 컨트롤
+                    col1, col2, col3, col4, col5 = st.columns([1, 1, 2, 1, 1])
+                    
+                    with col1:
+                        if st.button("⏮️ 처음", disabled=(current_start == 0)):
+                            st.session_state.preview_page_start = 0
+                            st.rerun()
+                    
+                    with col2:
+                        if st.button("◀️ 이전", disabled=(current_start == 0)):
+                            st.session_state.preview_page_start = max(0, current_start - 4)
+                            st.rerun()
+                    
+                    with col3:
+                        st.write(f"**페이지 {current_start + 1}-{current_end} / 총 {total_pages}페이지**")
+                    
+                    with col4:
+                        if st.button("다음 ▶️", disabled=(current_end >= total_pages)):
+                            st.session_state.preview_page_start = min(current_start + 4, total_pages - 4)
+                            st.rerun()
+                    
+                    with col5:
+                        if st.button("마지막 ⏭️", disabled=(current_end >= total_pages)):
+                            st.session_state.preview_page_start = max(0, total_pages - 4)
+                            st.rerun()
+                    
+                    # 현재 페이지 범위의 미리보기 표시
+                    current_preview_images = all_preview_images[current_start:current_end]
+                    
+                    if current_preview_images:
+                        # 2열로 미리보기 표시
+                        cols = st.columns(2)
+                        for i, img_info in enumerate(current_preview_images):
+                            col_idx = i % 2
+                            with cols[col_idx]:
+                                st.write(f"**{img_info['description']}**")
+                                st.write(f"*여백: {img_info['margin_info']}*")
+                                st.write(f"*조정: {img_info['scale_info']}*")
+                                
+                                # 홀수/짝수에 따른 색상 표시
+                                if img_info['page_type'] == '홀수':
+                                    border_info = "🔴 홀수 페이지 (빨간 경계선)"
+                                else:
+                                    border_info = "🔵 짝수 페이지 (파란 경계선)"
+                                
+                                st.image(
+                                    img_info['image_data'], 
+                                    caption=f"미리보기 {img_info['page_number']} - {border_info} (고정번호: {img_info['fixed_page_number']})",
+                                    use_column_width=True
+                                )
+                    else:
+                        st.warning("미리보기 이미지를 생성할 수 없습니다.")
+                else:
+                    st.warning("미리보기 이미지를 생성할 수 없습니다.")
+            
+            # PDF 생성 옵션
+            st.subheader("📖 PDF 생성")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                show_margin_borders = st.checkbox(
+                    "여백 경계선 출력", 
+                    value=False,
+                    help="PDF에 여백 경계선을 포함하여 출력 (홀수 페이지: 빨간색, 짝수 페이지: 파란색)"
+                )
+            
+            with col2:
+                if show_margin_borders:
+                    st.info("🔴 홀수 페이지 / 🔵 짝수 페이지")
+                else:
+                    st.write("경계선 없이 깔끔하게 출력")
             
             # 편집 버튼
             if st.button("📖 PDF 생성하기", type="primary"):
@@ -841,7 +1288,8 @@ def main():
                             offset_y_odd=offset_y_odd,
                             scale_factor_even=scale_factor_even,
                             offset_x_even=offset_x_even,
-                            offset_y_even=offset_y_even
+                            offset_y_even=offset_y_even,
+                            show_borders=show_margin_borders
                         )
                         
                         # 결과 다운로드
