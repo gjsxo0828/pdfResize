@@ -969,45 +969,64 @@ def main():
     
     # 메인 영역
     try:
-        # PDF 분할 - 프로그래스바 추가
-        split_progress_container = st.empty()
-        split_status_container = st.empty()
+        # PDF 분할 최적화: 이미 분할된 경우 재사용
+        current_settings_key = f"{use_first_page}_{page_order}_{file_bytes[:100] if file_bytes else ''}"
         
-        def split_progress_callback(current, total, description):
-            progress_value = current / total if total > 0 else 0
-            split_progress_container.progress(progress_value)
-            split_status_container.info(f"📄 {description}")
+        if ('split_pages_cache' not in st.session_state or 
+            'settings_key' not in st.session_state or 
+            st.session_state.settings_key != current_settings_key):
+            
+            # 새로운 분할이 필요한 경우에만 실행
+            split_progress_container = st.empty()
+            split_status_container = st.empty()
+            
+            def split_progress_callback(current, total, description):
+                progress_value = current / total if total > 0 else 0
+                split_progress_container.progress(progress_value)
+                split_status_container.info(f"📄 {description}")
+            
+            with st.spinner("PDF 분할 중..."):
+                split_pages = editor.split_landscape_pages(tmp_file_path, use_first_page, split_progress_callback)
+            
+            # 프로그래스바 제거
+            split_progress_container.empty()
+            split_status_container.empty()
+            
+            if not split_pages:
+                st.error("PDF 분할에 실패했습니다. 파일을 확인해주세요.")
+                return
+            
+            # 페이지 순서 적용
+            ordered_pages = editor.apply_page_order(split_pages, page_order)
+            
+            # 세션 상태에 캐시 저장
+            st.session_state.split_pages_cache = ordered_pages
+            st.session_state.settings_key = current_settings_key
+            st.session_state.split_pages = ordered_pages  # 개별 조정용
+            
+            st.success(f"✅ 총 {len(ordered_pages)}개 페이지 준비 완료")
         
-        with st.spinner("PDF 분할 중..."):
-            split_pages = editor.split_landscape_pages(tmp_file_path, use_first_page, split_progress_callback)
-        
-        # 프로그래스바 제거
-        split_progress_container.empty()
-        split_status_container.empty()
-        
-        if not split_pages:
-            st.error("PDF 분할에 실패했습니다. 파일을 확인해주세요.")
-            return
-        
-        # 페이지 순서 적용
-        ordered_pages = editor.apply_page_order(split_pages, page_order)
-        
-        # 세션 상태에 분할된 페이지 정보 저장 (개별 조정에서 사용)
-        st.session_state.split_pages = ordered_pages
-        
-        st.success(f"✅ 총 {len(ordered_pages)}개 페이지 준비 완료")
+        else:
+            # 캐시된 데이터 사용
+            ordered_pages = st.session_state.split_pages_cache
+            st.info(f"📋 캐시된 {len(ordered_pages)}개 페이지 사용 중 (빠른 로딩)")
         
         # 미리보기
         st.subheader("👀 미리보기")
         
         # 미리보기 설정
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         with col1:
             show_page_numbers = st.checkbox("원본 페이지 번호 표시", value=True)
         with col2:
             # 페이지네이션을 위한 세션 상태 초기화
             if 'preview_start' not in st.session_state:
                 st.session_state.preview_start = 0
+        with col3:
+            if st.button("🔄 미리보기 캐시 초기화"):
+                if 'preview_cache' in st.session_state:
+                    st.session_state.preview_cache = {}
+                    st.success("미리보기 캐시가 초기화되었습니다.")
         
         if len(ordered_pages) > 0:
             # 현재 페이지 범위 계산
@@ -1033,58 +1052,80 @@ def main():
             # 미리보기 이미지 생성 및 표시
             cols = st.columns(min(4, len(preview_pages)))
             
-            with st.spinner("미리보기 생성 중..."):
-                for i, page_data in enumerate(preview_pages):
-                    with cols[i]:
-                        page_num = start_idx + i + 1
-                        st.write(f"**페이지 {page_num}**")
-                        st.write(f"*{page_data['description']}*")
+            # 미리보기 캐시 초기화
+            if 'preview_cache' not in st.session_state:
+                st.session_state.preview_cache = {}
+            
+            # 현재 설정에 대한 캐시 키 생성
+            margins_key = f"{margin_top}_{margin_bottom}_{margin_outer}_{margin_inner}"
+            settings_key = f"{scale_odd}_{offset_x_odd}_{offset_y_odd}_{scale_even}_{offset_x_even}_{offset_y_even}"
+            individual_key = str(st.session_state.get('individual_settings', {}))
+            cache_key_base = f"{margins_key}_{settings_key}_{individual_key}_{show_page_numbers}"
+            
+            for i, page_data in enumerate(preview_pages):
+                with cols[i]:
+                    page_num = start_idx + i + 1
+                    st.write(f"**페이지 {page_num}**")
+                    st.write(f"*{page_data['description']}*")
+                    
+                    # 현재 페이지의 설정 가져오기 (기본값 + 개별 조정)
+                    if 'individual_settings' in st.session_state and page_num in st.session_state.individual_settings:
+                        # 개별 조정이 있는 경우: 기본값 + 조정값
+                        if page_num % 2 == 1:  # 홀수 페이지 기본값
+                            base_scale = scale_odd
+                            base_offset_x = offset_x_odd
+                            base_offset_y = offset_y_odd
+                        else:  # 짝수 페이지 기본값
+                            base_scale = scale_even
+                            base_offset_x = offset_x_even
+                            base_offset_y = offset_y_even
                         
-                        # 현재 페이지의 설정 가져오기 (기본값 + 개별 조정)
-                        if 'individual_settings' in st.session_state and page_num in st.session_state.individual_settings:
-                            # 개별 조정이 있는 경우: 기본값 + 조정값
-                            if page_num % 2 == 1:  # 홀수 페이지 기본값
-                                base_scale = scale_odd
-                                base_offset_x = offset_x_odd
-                                base_offset_y = offset_y_odd
-                            else:  # 짝수 페이지 기본값
-                                base_scale = scale_even
-                                base_offset_x = offset_x_even
-                                base_offset_y = offset_y_even
-                            
-                            # 조정값 적용
-                            adjust = st.session_state.individual_settings[page_num]
-                            current_scale = base_scale + adjust['scale_adjust']
-                            current_offset_x = base_offset_x + adjust['offset_x_adjust']
-                            current_offset_y = base_offset_y + adjust['offset_y_adjust']
-                            st.write("⭐ 개별 조정 페이지")
-                        elif page_num % 2 == 1:  # 홀수 페이지
-                            current_scale = scale_odd
-                            current_offset_x = offset_x_odd
-                            current_offset_y = offset_y_odd
-                            st.write("🔴 홀수 페이지")
-                        else:  # 짝수 페이지
-                            current_scale = scale_even
-                            current_offset_x = offset_x_even
-                            current_offset_y = offset_y_even
-                            st.write("🔵 짝수 페이지")
-                        
-                        # 여백 설정
-                        margins = {
-                            'top': margin_top,
-                            'bottom': margin_bottom,
-                            'outer': margin_outer,
-                            'inner': margin_inner
-                        }
-                        
-                        # 미리보기 이미지 생성
+                        # 조정값 적용
+                        adjust = st.session_state.individual_settings[page_num]
+                        current_scale = base_scale + adjust['scale_adjust']
+                        current_offset_x = base_offset_x + adjust['offset_x_adjust']
+                        current_offset_y = base_offset_y + adjust['offset_y_adjust']
+                        st.write("⭐ 개별 조정 페이지")
+                    elif page_num % 2 == 1:  # 홀수 페이지
+                        current_scale = scale_odd
+                        current_offset_x = offset_x_odd
+                        current_offset_y = offset_y_odd
+                        st.write("🔴 홀수 페이지")
+                    else:  # 짝수 페이지
+                        current_scale = scale_even
+                        current_offset_x = offset_x_even
+                        current_offset_y = offset_y_even
+                        st.write("🔵 짝수 페이지")
+                    
+                    # 여백 설정
+                    margins = {
+                        'top': margin_top,
+                        'bottom': margin_bottom,
+                        'outer': margin_outer,
+                        'inner': margin_inner
+                    }
+                    
+                    # 페이지별 캐시 키
+                    page_cache_key = f"{cache_key_base}_{page_num}_{current_scale}_{current_offset_x}_{current_offset_y}"
+                    
+                    # 캐시된 미리보기가 있는지 확인
+                    if page_cache_key in st.session_state.preview_cache:
+                        # 캐시된 이미지 사용
+                        preview_img = st.session_state.preview_cache[page_cache_key]
+                        st.image(preview_img, use_column_width=True)
+                        st.caption("📋 캐시된 미리보기")
+                    else:
+                        # 새로운 미리보기 생성
                         try:
-                            preview_img = editor.create_preview_image(
-                                page_data, margins, current_scale, 
-                                current_offset_x, current_offset_y, 
-                                page_num, show_page_numbers
-                            )
-                            st.image(preview_img, use_column_width=True)
+                            with st.spinner(f"페이지 {page_num} 미리보기 생성..."):
+                                preview_img = editor.create_preview_image(
+                                    page_data, margins, current_scale, 
+                                    current_offset_x, current_offset_y, 
+                                    page_num, show_page_numbers
+                                )
+                                # 캐시에 저장
+                                st.session_state.preview_cache[page_cache_key] = preview_img
+                                st.image(preview_img, use_column_width=True)
                         except Exception as e:
                             st.error(f"미리보기 생성 실패: {e}")
                             st.write("미리보기를 생성할 수 없습니다.")
