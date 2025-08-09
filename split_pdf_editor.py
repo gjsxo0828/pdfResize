@@ -9,7 +9,7 @@ from reportlab.lib.colors import black, white
 import io
 import os
 import tempfile
-from PIL import Image
+from PIL import Image, ImageDraw
 import fitz  # PyMuPDF
 import numpy as np
 import base64
@@ -30,15 +30,15 @@ class SplitPDFEditor:
     
     def calculate_margins_for_page(self, page_number, margin_top, margin_bottom, margin_outer, margin_inner):
         """페이지 번호에 따라 실제 여백 계산 (홀수/짝수 페이지 고려)"""
-        # 홀수 페이지(1,3,5...): 왼쪽이 안쪽, 오른쪽이 바깥쪽
-        # 짝수 페이지(2,4,6...): 왼쪽이 바깥쪽, 오른쪽이 안쪽
+        # 홀수 페이지(1,3,5...): 왼쪽이 바깥쪽, 오른쪽이 안쪽
+        # 짝수 페이지(2,4,6...): 왼쪽이 안쪽, 오른쪽이 바깥쪽
         
         if page_number % 2 == 1:  # 홀수 페이지
-            margin_left = margin_inner   # 안쪽
-            margin_right = margin_outer  # 바깥쪽
-        else:  # 짝수 페이지
             margin_left = margin_outer   # 바깥쪽
             margin_right = margin_inner  # 안쪽
+        else:  # 짝수 페이지
+            margin_left = margin_inner   # 안쪽
+            margin_right = margin_outer  # 바깥쪽
         
         return {
             'top': margin_top,
@@ -46,6 +46,52 @@ class SplitPDFEditor:
             'left': margin_left,
             'right': margin_right
         }
+    
+    def add_margin_borders_to_image(self, image_data, page_number, margin_top, margin_bottom, margin_outer, margin_inner):
+        """이미지에 여백 경계선을 추가"""
+        # PIL Image로 변환
+        image = Image.open(io.BytesIO(image_data))
+        
+        # 이미지 크기
+        img_width, img_height = image.size
+        
+        # 여백 계산 (픽셀 단위로 변환)
+        margins = self.calculate_margins_for_page(page_number, margin_top, margin_bottom, margin_outer, margin_inner)
+        
+        # 125x175mm 비율로 여백을 픽셀로 변환
+        # 이미지 크기를 125x175 비율로 가정
+        margin_left_px = int((margins['left'] / 125) * img_width)
+        margin_right_px = int((margins['right'] / 125) * img_width)
+        margin_top_px = int((margins['top'] / 175) * img_height)
+        margin_bottom_px = int((margins['bottom'] / 175) * img_height)
+        
+        # 경계선 그리기
+        draw = ImageDraw.Draw(image)
+        
+        # 빨간색 경계선으로 여백 표시
+        border_color = (255, 0, 0)  # 빨간색
+        border_width = 2
+        
+        # 상단 경계선
+        draw.rectangle([0, margin_top_px-border_width, img_width, margin_top_px+border_width], 
+                      fill=border_color)
+        
+        # 하단 경계선
+        draw.rectangle([0, img_height-margin_bottom_px-border_width, img_width, img_height-margin_bottom_px+border_width], 
+                      fill=border_color)
+        
+        # 좌측 경계선
+        draw.rectangle([margin_left_px-border_width, 0, margin_left_px+border_width, img_height], 
+                      fill=border_color)
+        
+        # 우측 경계선
+        draw.rectangle([img_width-margin_right_px-border_width, 0, img_width-margin_right_px+border_width, img_height], 
+                      fill=border_color)
+        
+        # 이미지를 바이트로 변환하여 반환
+        output = io.BytesIO()
+        image.save(output, format='PNG')
+        return output.getvalue()
     
     def analyze_pdf_content(self, pdf_path):
         """PDF 내용 분석"""
@@ -171,15 +217,20 @@ class SplitPDFEditor:
         else:
             reordered_pages = all_pages
         
-        # 최종 미리보기 이미지 생성 (여백 정보 포함)
+        # 최종 미리보기 이미지 생성 (여백 정보 및 경계선 포함)
         preview_images = []
         for i, page_info in enumerate(reordered_pages[:max_pages]):
             page_number = i + 1
             margins = self.calculate_margins_for_page(page_number, margin_top, margin_bottom, margin_outer, margin_inner)
             
+            # 여백 경계선이 추가된 이미지 생성
+            bordered_image_data = self.add_margin_borders_to_image(
+                page_info['image_data'], page_number, margin_top, margin_bottom, margin_outer, margin_inner
+            )
+            
             preview_images.append({
                 'page_number': page_number,
-                'image_data': page_info['image_data'],
+                'image_data': bordered_image_data,
                 'description': f"페이지 {page_number} ({page_info['description']})",
                 'margins': margins,
                 'margin_info': f"위{margins['top']}mm, 아래{margins['bottom']}mm, 왼쪽{margins['left']}mm, 오른쪽{margins['right']}mm"
@@ -189,8 +240,9 @@ class SplitPDFEditor:
     
     def create_book_pages(self, content_pdf_path, margin_top=15, margin_bottom=15, 
                          margin_outer=15, margin_inner=15, split_direction='vertical',
-                         use_first_page=True, page_order="1234"):
-        """PDF 내용을 책 페이지 크기로 변환"""
+                         use_first_page=True, page_order="1234", scale_factor=1.0,
+                         offset_x=0, offset_y=0):
+        """PDF 내용을 책 페이지 크기로 변환 - 모든 페이지에 적용"""
         
         # 원본 PDF 읽기
         doc = fitz.open(content_pdf_path)
@@ -231,33 +283,20 @@ class SplitPDFEditor:
                 os.unlink(all_pages[0])  # 첫 페이지 파일 삭제
             all_pages = all_pages[1:]  # 첫 페이지 제거
         
-        # 페이지 순서에 따라 재배열
-        if len(all_pages) >= 4:
-            selected_pages = all_pages[:4]  # 처음 4페이지 선택
-            
-            # 페이지 순서 매핑
-            order_map = {
-                "1234": [0, 1, 2, 3],
-                "2341": [1, 2, 3, 0]
-            }
-            
-            if page_order in order_map:
-                indices = order_map[page_order]
-                reordered_pages = [selected_pages[i] for i in indices if i < len(selected_pages)]
-            else:
-                reordered_pages = selected_pages
-                
-            # 사용하지 않는 페이지 파일 삭제
-            unused_pages = [page for i, page in enumerate(selected_pages) if i not in order_map.get(page_order, [0, 1, 2, 3])]
-            for unused_page in unused_pages:
-                if os.path.exists(unused_page):
-                    os.unlink(unused_page)
+        # 페이지 순서에 따라 재배열 (모든 페이지에 적용)
+        order_map = {
+            "1234": lambda pages: pages,  # 순서 그대로
+            "2341": lambda pages: pages[1:] + [pages[0]] if len(pages) > 0 else pages  # 첫 페이지를 마지막으로
+        }
+        
+        if page_order in order_map:
+            reordered_pages = order_map[page_order](all_pages)
         else:
             reordered_pages = all_pages
         
         total_pages = 0
         
-        # 재배열된 페이지들을 PDF에 추가 (각 페이지별 여백 적용)
+        # 모든 페이지를 PDF에 추가 (각 페이지별 여백 적용)
         for i, img_path in enumerate(reordered_pages):
             if os.path.exists(img_path):
                 page_number = i + 1
@@ -273,10 +312,10 @@ class SplitPDFEditor:
                 content_width = self.book_width - margin_left_pt - margin_right_pt
                 content_height = self.book_height - margin_top_pt - margin_bottom_pt
                 
-                # 이미지를 페이지에 추가
+                # 이미지를 페이지에 추가 (축소 및 이동 적용)
                 self.add_page_to_book(
                     c, img_path, content_width, content_height, 
-                    margin_left_pt, margin_bottom_pt
+                    margin_left_pt, margin_bottom_pt, scale_factor, offset_x, offset_y
                 )
                 total_pages += 1
                 os.unlink(img_path)  # 임시 파일 삭제
@@ -301,16 +340,32 @@ class SplitPDFEditor:
             return img_file.name
     
     def add_page_to_book(self, canvas_obj, image_path, content_width, content_height, 
-                        margin_left_pt, margin_bottom_pt):
-        """이미지를 책 페이지에 추가"""
+                        margin_left_pt, margin_bottom_pt, scale_factor=1.0, 
+                        offset_x=0, offset_y=0):
+        """이미지를 책 페이지에 추가 (축소 및 이동 기능 포함)"""
         # 이미지 크기 조정
         adjusted_img_path = self.adjust_image_for_book(
-            image_path, content_width, content_height, 'fit_both'
+            image_path, content_width * scale_factor, content_height * scale_factor, 'fit_both'
         )
         
+        # 축소된 이미지의 실제 크기 계산
+        with Image.open(adjusted_img_path) as img:
+            actual_width, actual_height = img.size
+            # 포인트 단위로 변환
+            actual_width_pt = actual_width * 72 / img.info.get('dpi', (72, 72))[0] if 'dpi' in img.info else actual_width
+            actual_height_pt = actual_height * 72 / img.info.get('dpi', (72, 72))[1] if 'dpi' in img.info else actual_height
+        
+        # 중앙 정렬을 위한 오프셋 계산
+        center_offset_x = (content_width - actual_width_pt) / 2
+        center_offset_y = (content_height - actual_height_pt) / 2
+        
+        # 최종 위치 계산 (중앙 정렬 + 사용자 오프셋)
+        final_x = margin_left_pt + center_offset_x + self.convert_mm_to_points(offset_x)
+        final_y = margin_bottom_pt + center_offset_y + self.convert_mm_to_points(offset_y)
+        
         # 조정된 이미지를 새 페이지에 그리기
-        canvas_obj.drawImage(adjusted_img_path, margin_left_pt, margin_bottom_pt, 
-                           width=content_width, height=content_height)
+        canvas_obj.drawImage(adjusted_img_path, final_x, final_y, 
+                           width=actual_width_pt, height=actual_height_pt)
         
         canvas_obj.showPage()
         
@@ -491,14 +546,60 @@ def main():
                 margin_outer = st.slider("바깥쪽", 5, 40, 20, help="홀수 페이지 오른쪽, 짝수 페이지 왼쪽 여백")
             
             with col4:
-                margin_inner = st.slider("안쪽", 5, 40, 15, help="홀수 페이지 왼쪽, 짝수 페이지 오른쪽 여백")
+                margin_inner = st.slider("안쪽", 5, 40, 15, help="홀수 페이지 왼쪽, 짝수 페이지 오른쪽 여백 (제본 부분)")
             
             # 여백 설명
             st.markdown("""
             **여백 설명:**
             - **위/아래**: 모든 페이지의 상단/하단 여백
-            - **바깥쪽**: 홀수 페이지(1,3,5...)의 오른쪽, 짝수 페이지(2,4,6...)의 왼쪽 여백
-            - **안쪽**: 홀수 페이지(1,3,5...)의 왼쪽, 짝수 페이지(2,4,6...)의 오른쪽 여백 (제본 부분)
+            - **바깥쪽**: 홀수 페이지(1,3,5...)의 왼쪽, 짝수 페이지(2,4,6...)의 오른쪽 여백
+            - **안쪽**: 홀수 페이지(1,3,5...)의 오른쪽, 짝수 페이지(2,4,6...)의 왼쪽 여백 (제본 부분)
+            """)
+            
+            # 페이지 조정 설정
+            st.subheader("🎛️ 페이지 조정")
+            st.markdown("**페이지 축소 및 위치 조정**")
+            
+            col1, col2, col3, col4, col5 = st.columns(5)
+            
+            with col1:
+                scale_factor = st.slider("축소 비율", 0.5, 1.0, 1.0, 0.05, help="페이지 축소 비율 (1.0 = 원본 크기)")
+            
+            with col2:
+                offset_x = st.slider("좌우 이동", -20, 20, 0, 1, help="페이지를 좌우로 이동 (mm)")
+            
+            with col3:
+                offset_y = st.slider("상하 이동", -20, 20, 0, 1, help="페이지를 상하로 이동 (mm)")
+            
+            with col4:
+                st.markdown("**축소 가이드**")
+                st.write(f"현재: {int(scale_factor*100)}%")
+                if scale_factor < 0.8:
+                    st.warning("⚠️ 너무 작음")
+                elif scale_factor < 0.9:
+                    st.info("ℹ️ 적당함")
+                else:
+                    st.success("✅ 원본 크기")
+            
+            with col5:
+                st.markdown("**이동 가이드**")
+                direction = ""
+                if offset_x > 0:
+                    direction += "→ "
+                elif offset_x < 0:
+                    direction += "← "
+                if offset_y > 0:
+                    direction += "↑"
+                elif offset_y < 0:
+                    direction += "↓"
+                st.write(f"방향: {direction if direction else '중앙'}")
+            
+            # 페이지 조정 설명
+            st.markdown("""
+            **페이지 조정 설명:**
+            - **축소 비율**: 페이지 내용의 크기를 조절합니다 (여백은 그대로 유지)
+            - **좌우 이동**: 양수는 오른쪽, 음수는 왼쪽으로 이동
+            - **상하 이동**: 양수는 위쪽, 음수는 아래쪽으로 이동
             """)
             
             # 미리보기 표시
@@ -550,7 +651,10 @@ def main():
                             margin_inner=margin_inner,
                             split_direction=split_direction,
                             use_first_page=use_first_page,
-                            page_order=page_order
+                            page_order=page_order,
+                            scale_factor=scale_factor,
+                            offset_x=offset_x,
+                            offset_y=offset_y
                         )
                         
                         # 결과 다운로드
