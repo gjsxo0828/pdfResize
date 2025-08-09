@@ -868,7 +868,7 @@ def main():
                 with col1:
                     page_to_add = st.selectbox("미세조정할 페이지 선택", range(1, max_pages + 1), key="page_selector")
                 with col2:
-                    if st.button("페이지 추가", key="add_page_btn"):
+                    if st.button("추가", key="add_page_btn"):
                         if page_to_add not in st.session_state.individual_settings:
                             # 기본값으로 초기화 (홀수/짝수에 따라)
                             if page_to_add % 2 == 1:  # 홀수
@@ -905,10 +905,17 @@ def main():
                             base_offset_y = offset_y_even
                             page_type = "🔵 짝수"
                         
-                        st.write(f"📄 **페이지 {page_num}** ({page_type})")
+                        # 페이지 제목과 삭제 버튼을 같은 줄에 배치
+                        title_col, remove_col = st.columns([4, 1])
+                        with title_col:
+                            st.write(f"📄 **페이지 {page_num}** ({page_type})")
+                        with remove_col:
+                            if st.button("🗑️", key=f"remove_page_{page_num}", help="이 페이지 조정 제거"):
+                                pages_to_remove.append(page_num)
+                        
                         st.caption(f"기본값: 축소 {base_scale:.2f}, 좌우 {base_offset_x:.1f}, 상하 {base_offset_y:.1f}")
                         
-                        col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
+                        col1, col2, col3 = st.columns(3)
                         
                         with col1:
                             individual_settings[page_num]['scale_adjust'] = st.number_input(
@@ -939,10 +946,6 @@ def main():
                                 key=f"individual_offset_y_{page_num}",
                                 help=f"최종값: {base_offset_y + individual_settings[page_num]['offset_y_adjust']:.1f}"
                             )
-                        
-                        with col4:
-                            if st.button("제거", key=f"remove_page_{page_num}"):
-                                pages_to_remove.append(page_num)
                     
                     # 제거된 페이지들 처리
                     for page_num in pages_to_remove:
